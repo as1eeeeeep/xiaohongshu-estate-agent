@@ -3,3 +3,15 @@ sentence-transformers>=3.0.0
 openai>=1.30.0
 openpyxl>=3.1.0
 python-docx>=1.1.0
+Pillow>=10.0.0
+pillow-heif>=0.17.0
+requests>=2.31.0
+pydantic>=2.0.0
+
+# ============================================================
+# 外部 CLI 工具（需单独安装）
+# ============================================================
+# xiaohongshu-cli (xhs) — 小红书笔记搜索/评论获取/下载
+#   安装: pip install xiaohongshu-cli
+#   或: npm install -g xiaohongshu-cli
+#   文档: https://github.com/xiaohongshu/xiaohongshu-cli
