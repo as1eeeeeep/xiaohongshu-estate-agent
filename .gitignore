@@ -18,8 +18,8 @@ venv/
 .vscode/
 .idea/
 
-# Claude Code 内部文件
-.claude/
+# Claude Code — 仅排除本地私密配置，skills 正常上传
+**/.claude/settings.local.json
 
 # 系统文件
 .DS_Store
