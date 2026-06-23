@@ -1,0 +1,42 @@
+{
+  "name": "hong-kong-listing-cover-creator",
+  "version": "1.0.0",
+  "agents": [
+    {
+      "id": "image_selector",
+      "role": "房源封面选图摄影师",
+      "input": "同一套房源多张实拍照片",
+      "output": "selection.json",
+      "rules": "每张真实室内素材都必须判断为客厅、卧室、餐厅、厨房之一；非典型小户型起居/工作区归客厅；外观、户型图、截图、地图、海报排除。"
+    },
+    {
+      "id": "renovation_stylist",
+      "role": "真实室内软装造型师",
+      "input": "被选中的素材图和房间类型",
+      "output": "renovated_no_text.png",
+      "rules": "只做可信小件软装和摄影优化；不放大房间；不改窗、门、墙、地板、固定装置；不生成任何文字。"
+    },
+    {
+      "id": "redline_reviewer",
+      "role": "真实性与红线质检员",
+      "input": "原图和纯装修图",
+      "output": "qa_attempt_*.json",
+      "rules": "检查文字、水印、空间放大、窗户遮挡、硬装改变、大件家具新增、AI/CGI质感。"
+    },
+    {
+      "id": "cover_typographer",
+      "role": "小红书封面排版师",
+      "input": "通过质检的纯装修图、标题、副标题",
+      "output": "final_cover.png",
+      "rules": "本地叠字，不让生图模型生成文字。"
+    }
+  ],
+  "artifacts": [
+    "selection.json",
+    "selected_source.*",
+    "qa_attempt_*.json",
+    "renovated_no_text.png",
+    "final_cover.png",
+    "skipped.json"
+  ]
+}

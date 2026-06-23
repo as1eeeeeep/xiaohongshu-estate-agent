@@ -50,3 +50,8 @@ python 03_Agent_Generator/writer.py --persona <amateur|agent|lean> --count N [--
 来接续这部分功能，请只继承红线规则（房间不能放大、不能遮挡窗户、不能有文字水印、
 保持房间真实功能）和房间类型软装方案，不要依赖任何已删除的 `writer.py` 符号
 （`generate_cover()` / `_find_living_room_image()` / `_build_cover_prompt()` 等均已不存在）。
+
+这个独立生图 agent 已经落地在 `06_Agent_CoverCreator/`（选图 → AI 装修生图 → 红线质检
+重试 → 本地排版加字，5种封面风格）。调用方式见该目录下的 `README.md`，统一入口是
+`06_Agent_CoverCreator/run.sh`，Codex 和 Claude Code 都应该调这个脚本，不要手写复刻它的
+prompt 逻辑——原因和 Agent3 禁止手写模仿一样：脚本是确定性的，手写会导致风格漂移。

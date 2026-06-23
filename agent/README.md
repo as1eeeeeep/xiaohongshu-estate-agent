@@ -24,6 +24,9 @@ d:/xiaohongshu_estate/
 │   ├── 01_Agent_Scraper/           # Agent 1 (爬虫/下载模块，仿真模式)
 │   ├── 02_Agent_Analyzer/          # Agent 2 (思路分析模块) -> analyzer.py
 │   ├── 03_Agent_Generator/         # Agent 3 (笔记与图文创作) -> writer.py
+│   ├── 04_Agent_AmateurViral/      # Agent 4 (素人口吻爆款改写)
+│   ├── 05_Agent_TrafficCritic/     # Agent 5 (流量审稿与封面批评)
+│   ├── 06_Agent_CoverCreator/      # Agent 6 (房源照片精装修封面生成)
 │   ├── shared/                     # 公共配置模块 (ChromaDB, 环境变量等) -> config.py
 │   ├── .env                        # 存放 API 秘钥等环境变量
 │   └── README.md                   # 本指南文件

@@ -1,0 +1,18 @@
+{
+  "provider": "gemini",
+  "selection_model": "gpt-5.5",
+  "image_model": "gpt-image-2",
+  "gemini_selection_model": "gemini-flash-lite-latest",
+  "gemini_image_model": "gemini-2.5-flash-image",
+  "image_quality": "high",
+  "output_size": "1536x1024",
+  "max_renovation_attempts": 2,
+  "default_cover_style": "editorial",
+  "default_title": "香港质感小家",
+  "default_subtitle": "真实房源｜杂志感室内",
+  "font_candidates": [
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/STHeiti Light.ttc",
+    "/Library/Fonts/Arial Unicode.ttf"
+  ]
+}

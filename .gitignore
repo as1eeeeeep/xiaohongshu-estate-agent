@@ -16,6 +16,8 @@ venv/
 /05_output(zhongbao)/
 /06_output(multiangle)/
 agent/04_outputs/
+agent/06_Agent_CoverCreator/output/
+agent/06_Agent_CoverCreator/input/
 
 # IDE
 .vscode/
