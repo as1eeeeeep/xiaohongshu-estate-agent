@@ -11,6 +11,12 @@ venv/
 # 下载的临时文件
 01_materials/viral_examples/
 
+# 生成产物输出目录（体积大，不入库）
+/04_outputs/
+/05_output(zhongbao)/
+/06_output(multiangle)/
+agent/04_outputs/
+
 # IDE
 .vscode/
 .idea/
