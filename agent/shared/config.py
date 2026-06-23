@@ -37,7 +37,7 @@ DOWNLOADS_DIR = PROJECT_ROOT / "05_20_XHS_Downloads" / "AI_Spider"
 PROPERTIES_DIR = PROJECT_ROOT / "01_materials" / "properties"
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
-# 重型模型 — 纯文本深度推理、创意写作（等待 3.5 Pro 发布后升级）
+# 重型模型 — 纯文本深度推理、创意写作
 HEAVY_MODEL = "gemini-3.1-pro-preview"
 
 # 轻型模型 — 分类、提取、解析

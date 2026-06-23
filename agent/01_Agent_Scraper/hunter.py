@@ -48,23 +48,24 @@ XHS_CLI_CMD = "xhs"
 
 # 搜索关键词（用于发现笔记并获取 xsec_token）
 SEARCH_KEYWORDS = [
-    "香港买房经历",
-    "香港看房日记",
-    "香港上车记",
-    "香港买房分享",
-    "香港业主自述",
-    "我终于在香港买房",
-    "香港收楼记",
-    "港岛买房心得",
-    "香港小家",
-    "香港买房记录",
+    "香港放售",
+    "香港楼盘介绍",
+    "香港二手笋盘",
+    "香港上车楼盘",
+    "港岛放盘",
+    "九龙新盘",
+    "香港业主急放",
+    "铜锣湾放盘",
+    "湾仔楼盘",
+    "西营盘楼盘",
+    "香港细价楼",
 ]
-SEARCH_PAGES_PER_KEYWORD = 2  # 每个关键词搜2页，扩大覆盖面
+SEARCH_PAGES_PER_KEYWORD = 3  # 每个关键词搜3页
 SEARCH_TYPE = "image"          # 只要图文笔记
-SEARCH_SORT = "latest"  # 按最新排序，确保获取一个月内的笔记
+SEARCH_SORT = "latest"         # 按最新排序
 
 # ── 时效性过滤 ──
-PUBLISHED_WITHIN_DAYS = 30  # 只要最近 N 天内发布的笔记
+PUBLISHED_WITHIN_DAYS = 14  # 只要最近 14 天内的笔记
 
 MIN_INQUIRY_COUNT = 2
 MIN_INQUIRY_RATIO = 0.20
@@ -880,7 +881,7 @@ def save_qualified_lead(entry: dict):
 
 def save_crawl_results(results: list[dict], run_start: datetime) -> Path:
     """将本次爬取的合格笔记 URL 存档到 viral_examples 下带时间戳的文件夹。"""
-    folder_name = f"{run_start.strftime('%H时%M分')}_爬取结果"
+    folder_name = f"{run_start.strftime('%Y-%m-%d_%H时%M分')}_爬取结果"
     crawl_dir = VIRAL_DIR / folder_name
     crawl_dir.mkdir(parents=True, exist_ok=True)
 

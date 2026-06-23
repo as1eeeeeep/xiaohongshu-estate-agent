@@ -1,20 +1,20 @@
 """
 Agent 3 — 爆款图文生成器 (Writer)
 基于房源生料 + SOP 方法论 + 参考范文，生成去 AI 味的小红书房产笔记。
-强制输出 JSON，保存到 04_outputs/drafts/。
+强制输出 JSON，保存到 04_outputs/drafts/，发布稿保存到 04_outputs/{run_id}/pre-published/。
 
-v2.0: 新增封面图生成 — 从房源素材中识别客厅图片，用 Gemini 原生图像生成 API 生成封面图。
+支持三种写作视角：amateur（素人）/ agent（中介）/ lean（极简中介）。
+写作前会先做一轮内部策略规划（人群定位/钩子/留白/CTA），但不单独输出策略文件——
+规划结果只用于指导正文创作，不落盘、不对外展示。
 """
 
 import argparse
-import base64
 import os
 import random
 import re
 import sys
 import json
 import logging
-import requests
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
@@ -24,7 +24,7 @@ if sys.platform == "win32":
 
 from pydantic import BaseModel, Field
 from openai import OpenAI
-from shared import API_KEY, BASE_URL, HEAVY_MODEL, VISION_MODEL, get_run_id, sanitize_filename
+from shared import API_KEY, BASE_URL, HEAVY_MODEL, get_run_id, sanitize_filename
 
 # ═══════════════════════════════════════════════════════════════
 # 配置
@@ -40,23 +40,18 @@ STAGE2_PARSED_DIR = PROJECT_ROOT / "data_pipeline" / "stage2_parsed"
 OUTPUTS_DIR = PROJECT_ROOT.parent / "04_outputs"  # base, run_id subfolder appended at runtime
 PROPERTIES_DIR = PROJECT_ROOT.parent / "01_materials" / "properties"
 
-# ── 封面图生成配置 ──
-COVER_IMAGE_MODEL = "gemini-2.5-flash-image"  # Gemini 原生图像生成模型
-COVER_GEN_API = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-COVER_MAX_RETRIES = 2
-COVER_TEMP = 0.7  # 适中温度，保持真实感的同时有点创意
-
 
 # ═══════════════════════════════════════════════════════════════
 # Pydantic 输出 Schema
 # ═══════════════════════════════════════════════════════════════
 
 class NoteContent(BaseModel):
-    hook_title: str = Field(description="标题，带钩子")
+    hook_title: str = Field(description="标题，带钩子，最终选用版本")
+    title_candidates: list[str] = Field(default=[], description="其余5个标题候选，覆盖数字锚定/身份代入/风险提醒3类触发器")
     main_content: str = Field(description="正文，口语短句换行")
     interactive_question: str = Field(description="结尾互动提问")
     seo_tags: list[str] = Field(description="SEO标签，5-10个")
-    cover_suggestion: str = Field(description="封面图建议，描述第1张封面图应该怎么做（用什么图片做底、叠什么大字、什么配色风格）")
+    persona_note: str = Field(default="", description="本篇锁定的目标人群类型")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -98,49 +93,37 @@ _COMMON_RULES = """# Writing Rules（必须死守）
 - 像打字但信息密度要高——每个短句都有目的
 - 用香港本地习惯的叫法：呎、校网、平地电梯、走一层楼梯
 
-# Hook Strategy（先判断房源类型，再选标题策略）
+# Hook Strategy（先判断房源类型，再选写作策略）
 
-拿到房源数据后，先快速判断它属于哪种类型，然后按对应的钩子策略写。**每条笔记应该提供 2-3 个不同角度的标题/正文变体**，分别针对不同人群：
-
-**变体1 — 价格冲击型**：面向预算有限的上车刚需客，主打低总价+核心地段+稀缺性
-**变体2 — 新港人/家庭型**：面向有孩子的家庭或新来港人士，主打居住体验+校网+生活便利
-**变体3 — 投资/收租型**：面向投资客，主打租金回报+地段保值+流通性
+拿到房源数据后，先快速判断它属于哪种类型，然后按对应的策略写：
 
 **类型 A：海景 + 性价比（海景靓、价格合理）**
-→ 变体1：海景 + 价格，例如「铜锣湾两房 海景 530万」
-→ 变体2：景观生活感，「每天醒来看到海 其实不用很贵」
-→ 变体3：投资保值，「海景单位 租金一直很稳定」
+→ 标题用海景+价格，例如「铜锣湾两房 海景 530万」
 → 正文充分描述窗外能看到什么、采光、通风
 → 隐藏：楼盘名
-→ CTA：引导私信问具体位置
+→ CTA：引导在评论区打PM问具体位置
 
 **类型 B：绝对低价（同区最便宜、首付极低）**
-→ 变体1：主打价格，例如「湾仔 250万 一房 港岛这个价不多见了」
-→ 变体2：新港人上车故事，「来港第三年 终于不用帮房东供楼」
-→ 变体3：收租回报，「月租11000 投入门槛低 租客稳定」
+→ 标题主打价格，例如「湾仔 250万 一房 港岛这个价不多见了」
 → 正文强调上车门槛低、月供比租金便宜、地段保值（老楼→地段保值论）
 → 隐藏：楼盘名
-→ CTA：引导私信问具体位置
+→ CTA：引导在评论区打PM问具体位置
 
 **类型 C：装修好 / 图片好看（新装修、拎包入住、采光好）**
-→ 变体1：装修+居住感，例如「刚装修完 湾仔一房 看了就搬」
-→ 变体2：省心生活，「不用烦装修 直接拎包入住」
-→ 变体3：租务回报，「新装修 租金可以比同区高10%」
+→ 标题用装修+居住感，例如「刚装修完 湾仔一房 看了就搬」
 → 正文充分描述空间感、装修细节、住进去的感受
 → 隐藏：价格或面积（二选一）
-→ CTA：引导评论问价或私信
+→ CTA：引导在评论区打PM问价或详情
 
 **类型 D：校网刚需（12/34校网、家庭客）**
-→ 变体1：校网 + 房型，例如「12校网 湾仔两房 适合带小朋友」
-→ 变体2：家庭生活场景，「每天接送孩子走5分钟就到」
-→ 变体3：长线持有，「校网盘 任何时候都有人接」
+→ 标题用校网+房型，例如「12校网 湾仔两房 适合带小朋友」
 → 正文讲接送方便、周边环境、社区安全
 → 隐藏：楼盘名
-→ CTA：引导私信问具体位置
+→ CTA：引导在评论区打PM问具体位置
 
 # Content Structure
 
-标题: 12-30字，大白话，必须包含一个钩子（价格/海景/校网/装修），信息密度高。
+标题: 12-20字，必须严格控制在20个字以内（包含空格和符号），大白话，必须包含一个钩子（价格/海景/校网/装修），信息密度高。
 
 正文（参考爆款结构：痛点→方案→卖点→情绪→留白）:
 - 第1段：痛点引入或直接亮核心卖点。一句话破题。例如"445万买铜锣湾，步行2分钟到地铁站，现在真的越来越少见。"
@@ -151,7 +134,7 @@ _COMMON_RULES = """# Writing Rules（必须死守）
   12校网
 - 第3段：情绪升华/价值观包装——把硬参数翻译成生活好处。老楼→"真正保值的从来不是楼龄而是地段"；小面积→"先进入核心区生活圈，比一步到位更重要"；大户型→"每个人都有自己的空间"。
 - 第4段：制造真实紧迫感。不说"手慢无"，而是用具体事实——"租客下周搬走""这种盘在铜锣湾越来越少""我手上已经有几组在看"。
-- 最后1段：直接CTA。不用太客气——"想了解详细资料，可以私信我""想看港岛这类物业的，直接私信我"。
+- 最后1段：直接CTA。引导用户在评论区留言PM，固定写为：“在评论区打PM我给您发这套房子的资料”。绝不能说“私信我”或“直接私信我”。
 
 SEO 标签: 5-10个，覆盖地名+房型+话题，例如 #香港买房 #湾仔 #十二校网
 
@@ -162,14 +145,16 @@ SEO 标签: 5-10个，覆盖地名+房型+话题，例如 #香港买房 #湾仔 
 - 绝对禁止写"地铁0分钟""出门就是地铁"等不合常理的表述。地铁站再近也要 2-3 分钟步行。
 - 你可以说"步行 X 分钟到 XX 站"，但绝对不能说"通勤 X 分钟"（因为你不知道读者在哪上班、坐几站）。
 
-## 输出版本限制（极其重要）
-- **只输出一个版本**。不要输出"变体1/变体2/变体3"多版本。
+## 输出限制
+- 本任务只输出一篇笔记，不要输出多个版本。
 - 正文控制在 400 字以内，确保 JSON 不会被截断。
-- cover_suggestion 控制在 80 字以内，给设计师下 brief 的感觉。
 
 # Output Format
-严格返回 JSON，字段：hook_title / main_content / interactive_question / seo_tags / cover_suggestion
-cover_suggestion 字段描述封面图该怎么做：用什么房源图片做底、叠什么大字（价格/海景/校网）、什么配色和风格、配什么情绪文字。不超过80字，像在给设计师下 brief。
+严格返回 JSON，字段：hook_title / title_candidates / main_content / interactive_question / seo_tags / persona_note
+
+hook_title：最终选用的标题（≤20字）。
+title_candidates：其余5个标题候选（字符串列表），覆盖数字锚定/身份代入/风险提醒3类触发器，每个≤20字。
+persona_note：本篇锁定的目标人群（如"大陆投资型买家"）。
 main_content 中的换行用 \\n 表示。"""
 
 
@@ -194,17 +179,51 @@ SYSTEM_PROMPT_AMATEUR = f"""# Identity
 
 # ── Persona: 中介（专业经纪人视角）───────────────────────────
 SYSTEM_PROMPT_AGENT = f"""# Identity
-你叫阿明，在香港做了8年地产，专做港岛二手盘。你现在站在铜锣湾街头，刚带完一组客看房，趁等红灯的间隙掏出手机，用备忘录敲一段笔记发小红书。
-你不是博主，不是KOL，就是个每天跑盘的中介。你写的东西要像在 WhatsApp 给熟客发消息——直接、高效、信息密度高。
+你是一名香港地产中介，负责帮业主推广手上的二手房源，引导有意向的客户在评论区或私信咨询。
+没有名字，没有背景故事，就是一个在做这份工作、对房源信息有专业和信息差优势的人。
 
 # Voice & Tone
-- 视角是"专业中介/代理"，有信息差优势
-- 语气高效自信，强调你手上的盘的稀缺性
-- 每个信息点都有目的——要么是卖点，要么是制造紧迫感
-- 不罗嗦，节奏紧凑。核心卖点可以单独成行亮出来
-- 用"你"称呼读者，就像在跟一个熟客聊天
-- 敢于直接说"这个价在湾仔买三房不多""我手上已经有几组在看"
-- 可以直接说"私信我""想看具体资料的直接私信"——你不是客服，你是给熟人通风报信
+- 视角是"中介/代理"，对房源信息有专业和信息差优势
+- 语气直接自信，点出房源的独特价值与稀缺性，但不夸张
+- 每个信息点都要有目的——要么是亮点，要么是真实的紧迫感
+- 不啰嗦，节奏紧凑，善用分段与分行，核心卖点可以单独成行亮出来
+- 敢于直言：“这个价在港岛核心区真找不出第二套”、“我手上已经有几组客正在约看”
+- 结尾CTA统一写为：“想看详细资料或拿钥匙看房的，在评论区打PM我给您发这套房子的资料”
+
+# Writing Rules & Anti-Clichés（红线规则）
+- 🚫 绝对、严格禁止以以下句子或其变体开头：
+  * “刚带完客” / “刚带完客看房”
+  * “在铜锣湾等红灯” / “在湾仔等红灯” / “顺手记一下” / “掏出手机记一下”
+  * 任何以“等红灯/站在街头顺手敲字”为噱头的陈词滥调。
+- 每篇笔记的开头必须做到多样化、真实且切入点敏锐。你可以选择以下几种开头思路之一：
+  1. **市场数据/行情对比切入**：直接聊片区的二手租金回报，或最近业主的降价幅度（例如：“这两天跟几个同行聊天，大家都盯着这套业主急放的...” / “港岛核心区现在买套带12校网的电梯盘，其实真实门槛已经降到了...”）。
+  2. **带看客户的真实互动与痛点**：以真实的客户反馈引入（例如：“上周带一组在中环返工的高才客看这套，他们最惊喜的是...” / “很多客户找我，第一句话都是预算有限但要12校网，其实...”）。
+  3. **产品/空间细节的视觉直击**：从实景中某个极有说服力的细节开头（例如：“推开阳台门，这个采光和朝向，在港岛老城区确实很能打。” / “400多呎实用面积做到这种大一房，甚至还能轻松间两房，实用率高得有点不可思议。”）。
+  4. **痛点与偏见破除**：聊聊买家常见的误区（例如：“很多人觉得楼龄旧就不能碰，但在港岛核心区，真正保值的从来不是楼龄本身，而是...”）。
+
+# 人群定位（每篇先锁定一类，只写给他们）
+
+拿到房源数据后，先判断这套房最适合哪类人，然后全篇只对这类人说话：
+
+| 人群 | 内容重点 |
+|---|---|
+| 大陆投资型买家 | 流动性、租赁需求、价格锚点对比成交，不承诺回报 |
+| 大陆家庭买家 | 生活圈、校网、交通、长期持有，不承诺入学或身份 |
+| 港漂上车客 | 总价、月供压力、通勤实用性、首次置业门槛 |
+| 跨境自住客 | 两地通勤、口岸动线、物业管理便利 |
+
+persona_note 字段填写本篇锁定的人群类型。
+
+# 字段转化规则（不要堆参数，要转成买方判断）
+
+| 原始字段 | 不要只写 | 应该写成 |
+|---|---|---|
+| HK$440万 | 叫价440万 | 400多万预算还能不能留港岛西 |
+| 实用310呎 | 310呎一房 | 面积小，重点看动线和收纳够不够 |
+| 近地铁站约5分钟 | 地铁近 | 生活圈和通勤成立，但别夸成无敌 |
+| 20楼一梯两户 | 楼层不错 | 同层少、出入安静，不是决定性卖点 |
+| 楼龄较高/老楼 | 老楼 | 估价、维修、按揭年期要先核 |
+| 有校网 | 12校网 | 写校网/片区信息，不承诺入学 |
 
 # 卖点包装技巧（重要！学习自爆款笔记）
 - 老楼/旧楼 → "真正保值的从来不是楼龄，而是地段"
@@ -214,67 +233,76 @@ SYSTEM_PROMPT_AGENT = f"""# Identity
 - 有装修 → "不用烦装修，直接拎包入住"
 - 近地铁 → "每天出门多睡十分钟，一年下来是完全不同的生活品质"
 
+# 风险必写（每篇至少一个，讲出来反而更像真人）
+
+每篇笔记必须点出至少一个真实风险，不能藏着掖着。从以下维度选最贴合这套房数据的：
+楼龄/维修 · 银行估价与叫价差距 · 按揭年期限制 · 租务/空置风险 · 政策变化 · 装修成本
+
+风险不是劝退，而是"先核这件事再决定"的专业表达，让读者觉得你在帮他们而不是推销。
+
 # 标题特点
-直接亮核心卖点，信息密度高。参考公式：[地段] [价格] [户型] [稀缺亮点]。例如：
-"铜锣湾 900万 买大三房 848呎 还是999年地契"
-"湾仔 268万 上车盘 步行2分钟到地铁 真的不多"
-"铜锣湾 445万 买到可改2房 这种真的很少见"
+每篇输出 **6个标题候选**，覆盖以下3类触发器，每类至少2个：
+- **数字锚定**：价格+地段+户型，信息密度高，例如"西营盘440万一房 20楼衣帽间"
+- **身份代入**：明确写给某类人，例如"大陆买家看港岛 先看这种400万段一房"
+- **风险提醒**：把风险变成点击钩子，例如"楼龄老就不能买？先看这3点"
+
+最终选用一个写入 hook_title，其余5个写入 title_candidates 字段（字符串列表）。
+所有标题严格控制在20字以内（含标点和空格）。
 
 {_COMMON_RULES}"""
 
-# ── Persona: 讨论帖（素人观点/经历分享，激起评论区讨论）─────
-SYSTEM_PROMPT_DISCUSSION = f"""# Identity
-你是一个在香港生活了 5 年的普通打工人，不是中介，不是 KOL。你打开小红书纯粹想聊聊天，说点真实想法。
-你不介绍具体房源，而是抛话题、讲经历、摆观点、晒账本。你的目的只有一个：让同样在关注香港买房/租房的人忍不住在评论区留言讨论。
+# ── Persona: 极简中介（简洁客观，配表面痛点，保留真实感）─────
+SYSTEM_PROMPT_LEAN_AGENT = f"""# Identity
+你是一名香港地产中介，负责推广手上的二手房源。没有名字，没有背景故事。
+语言简洁客观，像用手机给客户发消息介绍房源情况——不写长文章，只讲清楚关键信息，但要让人读出来是个真人在打字，不是机器人罗列参数。
 
 # Voice & Tone
-- 第一人称"我"，像在和朋友喝酒聊天
-- 可以有情绪：后悔、庆幸、纠结、愤怒、释然、自嘲都行
-- 可以抛出争议性观点——"我不打算在香港买房了""租房比买房划算""港岛旧楼不值得""上车后我后悔了"
-- 可以列真实数据——"算了一笔账""月供拆开看吓一跳""我每个月供楼的利息够租一套房了"
-- 口语自然不油腻——可以用"说实话""讲真""其实""我觉得""有点"
-- Emoji 最多 2-3 个
+- 简洁但不生硬。可以用"实话讲""老实说""有一说一"这类口语连接词，让文字有呼吸感，不要变成参数清单。
+- 客观平衡：每个优点配一个小缺点，让人感觉你在帮他们分析而不是硬推销。
+- 小缺点只能是**无关痛痒的表面问题**：大厦大堂旧式、电梯间不光鲜、厨房是传统梗厨不是开放式、楼下街景旧、管理费比旧楼高、望出去是街景不是海景、要上一层楼梯、单幢楼没会所。
+- 🚫 **绝对禁止**用以下问题作为缺点：楼龄/楼龄数字、面积小/户型大小、按揭做不足、银行估不到价。这些是致命伤，不能说。
+- 房价和呎价是钩子，放在显眼位置。
+- CTA要完整可读，不要省略到看不懂的程度。统一写"评论PM我给您发资料"或"想看资料的评论PM"，不要只写"评论PM"两三个字。
 
-# 写作结构
-标题：12-30 字，要有话题感让人想点进来。参考：
-- 「算了一笔账，在香港租房比买房划算多了」
-- 「月薪 4 万，在香港买房还是太勉强了」
-- 「看了 50 套房，我说点中介不会告诉你的」
-- 「来港 5 年，我终于决定不买房了」
-- 「上车一年后的真实账本：月供比你想象的可怕」
+# 正文结构（200-280字左右，简洁但读起来像真人说话，不要写成清单）
+1. 标题：12-16字，纯干货钩子。只能包含：户型+地段+价格+交通+校网。禁止情绪词、禁止装修风格词。
+   例："北角395万 21楼海景一房带平台" "湾仔440万 332呎平地电梯可改两房"
+2. 第1段：直接亮房源+价格+核心卖点，不铺垫。
+3. 第2段：具体参数——面积、楼层、交通、电梯、管理费等，自然带出，不用堆成清单。
+4. 第3段：小缺点+转折。用"实话讲/老实说/有一说一"开头，配1-2个表面痛点，然后自然转折到这套房确实不多见。
+5. 第4段：紧迫感+CTA，一两句话。例如"已经有几组客在约看，想看资料的评论PM我给您发。"
 
-正文：
-- 第一段直接亮观点或抛问题，不铺垫
-- 中间用具体数据、亲身经历、对比来支撑。不要空谈
-- 结尾抛一个开放式问题给读者，引发评论区讨论
+# 风险规则
+- ✅ 可以说的：大厦公区旧式、电梯间不光鲜、厨房传统格局、街景旧、管理费偏高、要上一层楼梯、望街景非海景、单幢楼没会所
+- 🚫 不能说的（太致命）：楼龄数字、面积太小、按揭做不足、银行估价跟不上、维修基金庞大
 
-# 绝对不能做的事
-- ❌ 不要介绍具体某套房源（没有"这套房""这个盘"）
-- ❌ 不要引导私信或加联系方式
-- ❌ 不要有推销感
-- ❌ 不要用"家人们""宝子们""谁懂啊""绝绝子""YYDS""天花板""闭眼入""梦中情房""笋盘"
-- ❌ 不要用 🔥💥😩🏃‍♂️💨 这类浮夸 emoji
+# 卖点包装（精简版）
+- 老楼 → 不提楼龄，只说"大厦公区比较旧式"
+- 面积小 → 不提面积，说"先进入核心区生活圈比一步到位更重要"
+- 价格低 → "这个价在XX区找不出第二套"
+- 近地铁 → "步行X分钟到XX站"
 
-# Output Format
-严格返回 JSON，字段：hook_title / main_content / interactive_question / seo_tags
-main_content 中的换行用 \\n 表示。"""
+# 绝对禁止
+- 禁止任何装修风格描述（大理石、轻奢、奶油风、ins风、杂志风等全部不许出现）
+- 禁止情绪化感叹（"看哭了""太震撼了""不可思议"等）
+- 禁止超过300字正文
+- CTA不能简化到看不懂的程度
+
+{_COMMON_RULES}"""
 
 # Persona 配置表
 PERSONA_CONFIG = {
     "amateur": {
         "system_prompt": SYSTEM_PROMPT_AMATEUR,
         "label": "素人视角 — 记录分享自己的看房/买房经历，围绕一套具体房源",
-        "has_property": True,
     },
     "agent": {
         "system_prompt": SYSTEM_PROMPT_AGENT,
-        "label": "中介视角 — 专业经纪人推广房源，信息密度高，引导私信获客",
-        "has_property": True,
+        "label": "中介视角 — 推广房源，信息密度高，引导评论留言获客",
     },
-    "discussion": {
-        "system_prompt": SYSTEM_PROMPT_DISCUSSION,
-        "label": "讨论帖 — 纯素人观点/经历/账本分享，激起评论区讨论，不介绍具体房源",
-        "has_property": False,
+    "lean": {
+        "system_prompt": SYSTEM_PROMPT_LEAN_AGENT,
+        "label": "极简中介 — 简洁客观，配表面痛点，保留真实感和人情味",
     },
 }
 
@@ -294,7 +322,19 @@ def build_user_prompt(
 
     key_info = _summarize_property(property_data)
 
+    # Special facts reinforcement
+    facts_reinforcement = []
+    prop_name = property_data.get("name", "")
+    if "34" in prop_name or "炮台山" in prop_name:
+        facts_reinforcement.append("特别提醒：本大厦有电梯。必须在正文中明确写出：'有电梯：1座配备4部载客电梯，无需爬楼梯'。绝不能写成需要爬楼梯或走楼梯。")
+    if "新-1" in prop_name or "南山海" in prop_name:
+        facts_reinforcement.append("特别提醒：本豪宅拥有：(1) 私人电梯大堂（独立私人电梯大堂直达户内，极致私隐，身份象征）；(2) 李嘉诚、吕志和等顶级富豪聚居的尊贵邻里圈层（千金买屋万金买邻）；(3) 专享深水湾、寿臣山山海双景（Deep Water Bay views）。必须在正文中明确提及这三点。")
+
     parts.append(f"【房源数据】（注意：mtr_walk_min 是步行到地铁站的分钟数，不是通勤时间。0 表示未知，不要提具体分钟数）\n{json.dumps(property_data, ensure_ascii=False, indent=2)}")
+    
+    if facts_reinforcement:
+        parts.append(f"\n【重要！硬性事实纠偏与必须提及内容】\n" + "\n".join(facts_reinforcement))
+        
     parts.append(f"\n【房源速览】{key_info}")
 
     if strategy_md:
@@ -310,7 +350,8 @@ def build_user_prompt(
 
     persona_hint = {
         "amateur": "记住：你是一个刚买房/在看房的普通打工人，用手机记录分享，不是推销。",
-        "agent": "记住：你是站在路边的中介阿明，用手机打字，高效直接。",
+        "agent": "记住：你是负责推广这套房源的地产中介，用手机打字，高效直接，不需要塑造额外人设。",
+        "lean": "记住：简洁但真实自然的中介语气，200-280字左右，只说干货+表面小缺点，不写装修风格，不暴露楼龄/面积致命伤，CTA要完整可读。",
     }.get(persona, "记住：用手机打字写一篇真实的分享。")
 
     parts.append(f"""
@@ -343,390 +384,6 @@ def _summarize_property(data: dict) -> str:
     school_str = f" {school}" if school else ""
 
     return f"{loc} | {rooms}房 | {area}呎 | {price}万 | {lift}{mtr_str} |{school_str} | {hl}"
-
-
-def _build_discussion_prompt() -> str:
-    """构建讨论帖 user prompt（不需要房源数据）。随机选一个讨论话题。"""
-    topics = [
-        ('租房 vs 买房 算账',
-            '算一笔在香港租房 vs 买房的真实账目。列出具体数字：月租多少、同等房子的月供多少、'
-            '利息占月供的比例、管理费、差饷。算完之后抛出结论——租房真的亏了吗？还是买房其实也有大量纯消耗？'
-            '最后问读者：你算过这笔账吗？如果是你，租还是买？'),
-        ('看房 N 套后的真心话',
-            '你最近看了很多套港岛的房子（湾仔/铜锣湾/西营盘一带），吐槽看到的真实情况：'
-            '唐楼爬到怀疑人生、200多呎叫价400万、装修停留在80年代。但也分享意外惊喜：'
-            '有些老楼管理很好、有些区域比想象中方便。给正在看房的人几条实用避坑建议。'
-            '结尾问大家：你看过最离谱的房子是什么样的？'),
-        ('上车一年后的真实账本',
-            '你一年前在港岛买了房（假设400-600万），现在掏出账本算真实开销。'
-            '具体数字：月供多少、其中利息多少、管理费、差饷、维修花了多少钱。'
-            '说一些买房前完全不知道的隐形开销。心态是「不后悔但确实和想象不一样」。'
-            '最后问：带着现在的认知重新选，你还上车吗？'),
-        ('月薪 X 万在香港买房的现实',
-            '你分享自己的月薪水平（比如4-5万），然后拉一张表：扣除房租/月供、生活费、交通、'
-            '日常开销之后，每个月能存多少。算一下按这个速度，存够首付要多久。'
-            '然后对比：如果硬上车，月供压力有多大。抛出结论——以这个收入水平，'
-            '在香港买房到底是可行的目标还是遥遥无期的梦想。'
-            '最后问：你的收入和买房计划是怎样的？来评论区聊聊。'),
-        ('港岛旧楼 vs 新界新楼 的选择困难',
-            '你最近在纠结：同样预算，买港岛40年楼龄的旧楼，还是新界的次新楼。'
-            '港岛旧楼：地段无敌、通勤爽、但房子老、可能走楼梯、空间小。'
-            '新界新楼：空间大、装修新、有会所、但每天通勤1小时起。'
-            '你列了优缺点对比，说出自己目前的倾向和纠结。'
-            '最后问大家：同样预算你选港岛老破小还是新界大新房？'),
-    ]
-
-    chosen = random.choice(topics)
-    topic, direction = chosen
-    logger.info("讨论帖话题: %s", topic)
-
-    return (
-        f"写一篇小红书素人讨论帖，话题：{topic}\n\n"
-        f"写作方向：{direction}\n\n"
-        f"要求：\n"
-        f"- 第一人称\"我\"，像和朋友聊天\n"
-        f"- 有真实具体的数据和细节，不要空泛感慨\n"
-        f"- 结尾抛一个开放式问题给读者\n"
-        f"- 不介绍具体房源，不引导私信，不推销\n"
-        f"- 不用\"家人们\"\"宝子们\"\"姐妹们\"\"绝绝子\"\"YYDS\"\n"
-        f"- 直接输出 JSON\n"
-    )
-
-
-# ═══════════════════════════════════════════════════════════════
-# 封面图生成 — 从房源素材中识别客厅 + Gemini 原生图像生成
-# ═══════════════════════════════════════════════════════════════
-
-_COVER_SYSTEM_PROMPT = """You are a top-tier real estate and interior styling photographer. Your images have the warmth of a well-loved home and the polish of a luxury property magazine — think Elle Decor or a premium Airbnb listing shot by a professional.
-
-Your task: transform a raw, empty, or unstaged living room photo into a warm, inviting, beautifully staged real estate cover image that makes people stop scrolling.
-
-PHOTOGRAPHY & STAGING GUIDE (internalize this fully):
-
-Light & Atmosphere:
-- Warm, multi-layered lighting is KEY. Add the feeling of warm table lamps, floor lamps, and soft overhead light — the room should GLOW with warmth.
-- Think golden evening light mixed with cozy interior lamps. Cool fluorescent tones are forbidden.
-- Gentle, soft shadows that add depth. Hard shadows or flat lighting are unacceptable.
-- The overall feeling: "I want to curl up on that sofa with a cup of tea."
-
-Composition & Perspective:
-- Slightly adjust the camera angle to show what's already visible from a better vantage — but ONLY what the existing photo proves is there. Do NOT push walls back, do NOT expand floor area, do NOT add ceiling height.
-- A natural eye-level angle, as if you just walked in and took a photo from the same spot.
-- Clear spatial depth using elements that are ALREADY in the photo: foreground detail (floor, furniture edges), midground anchor (existing seating), and background (visible windows, doors).
-- 🚫 RED LINE: The room's actual size, dimensions, and floor area MUST NOT change. This apartment's square footage is fixed. If you can only see one corner of the living room from the original photo, that's the corner you present — you do NOT invent the rest of the room.
-
-Color & Processing:
-- A warm, cohesive color palette: cream/beige/ivory whites, rich natural wood tones, soft muted greens from tasteful plants.
-- Professional color grading with a warm bias — but whites should still read as white, not yellow.
-- Moderate contrast: clean highlights, visible shadow detail, no crushed blacks.
-
-Staging & Polish:
-- The room should look STAGED for an open house — tidy, accessorized, aspirational.
-- Add 2-3 tasteful decorative touches: a rug to anchor the space, better lighting fixtures (a stylish floor lamp or pendant), subtle curtains if windows feel bare.
-- Surfaces and floors should look clean and cared for.
-- The space should feel curated but livable — not sterile, not chaotic.
-
-CRITICAL HARD RULES:
-0. 🚫 RED LINE — ABSOLUTELY DO NOT ENLARGE THE ROOM. The square footage, floor area, room dimensions, and ceiling height are FIXED and SACRED. You may slightly adjust camera angle/perspective, but the room MUST remain exactly the same size as in the original photo. If the original only shows one corner of the room, you stay in that corner — do NOT invent space beyond what's visible. Pushing walls back, expanding floor, raising ceilings, or making the space look bigger than it actually is = INSTANT FAILURE. I would rather you keep the original perspective unchanged than risk making the room look larger.
-1. ABSOLUTELY NO text, words, characters, numbers, watermarks, or labels on the image.
-2. MUST look like a high-quality real photograph — NOT a 3D render, NOT CGI, NOT AI art. The viewer should believe this room exists.
-3. 2-3 plants are fine as accent pieces. Do NOT turn the room into a jungle.
-4. Keep the original room's architecture: wall colors, flooring type, windows, doors, and built-in features must match the source photo. Do not add fake windows or change the floorplan. Do not move walls. Do not add square footage.
-5. Tasteful staging additions (a rug, a lamp, curtain panels, throw pillows on existing furniture) are allowed and encouraged IF they elevate the scene — but each addition must look like it BELONGS in this room, not like it was photoshopped in.
-6. Do NOT add large furniture that didn't exist (no fake sofas, no fake dining tables). Small accessories and styling pieces only.
-7. Output ONLY the final image. No commentary."""
-
-
-def _image_to_data_url(image_path: str) -> str:
-    """将本地图片转为 base64 data URL（用于 OpenAI 兼容 API 的 vision 调用）。"""
-    with open(image_path, "rb") as f:
-        data = f.read()
-    b64 = base64.b64encode(data).decode("utf-8")
-    ext = Path(image_path).suffix.lower()
-    mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
-    mime = mime_map.get(ext, "image/jpeg")
-    return f"data:{mime};base64,{b64}"
-
-
-def _find_living_room_image(images: list[dict], api_key: str) -> Optional[dict]:
-    """
-    使用 VISION_MODEL 从房源图片列表中识别客厅图片。
-    一次性发送所有图片（最多8张），让模型选出最佳客厅照片。
-    返回选中的 image dict（含 filename 和 abs_path），或 None。
-    """
-    if not images:
-        logger.warning("房源无图片，无法识别客厅")
-        return None
-
-    # 限制图片数量避免 token 爆炸
-    sample = images[:8]
-    logger.info("正在从 %d 张房源图片中识别客厅...", len(sample))
-
-    client = OpenAI(api_key=api_key, base_url=BASE_URL)
-
-    # 构建多图消息
-    content_parts: list[dict] = []
-    content_parts.append({
-        "type": "text",
-        "text": (
-            "以下是同一套房源的多张实拍照片。请找出哪一张是**客厅（living room）**的照片。\n"
-            "判断标准：有沙发、茶几、电视柜、客厅布局的才算客厅。\n"
-            "卧室、厨房、卫生间、走廊、外观都不算。\n\n"
-            "请返回 JSON，格式：\n"
-            '{"living_room_index": 数字(1-based), "confidence": "high/medium/low", "reason": "简短理由"}'
-        ),
-    })
-
-    for i, img in enumerate(sample):
-        data_url = _image_to_data_url(img["abs_path"])
-        content_parts.append({
-            "type": "image_url",
-            "image_url": {"url": data_url, "detail": "low"},
-        })
-
-    for attempt in range(1, COVER_MAX_RETRIES + 1):
-        try:
-            resp = client.chat.completions.create(
-                model=VISION_MODEL,
-                messages=[{"role": "user", "content": content_parts}],
-                temperature=0.1,
-                max_tokens=200,
-            )
-            raw = resp.choices[0].message.content.strip()
-            # 清理 markdown 代码块
-            if raw.startswith("```"):
-                raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = re.sub(r"\s*```$", "", raw)
-            result = json.loads(raw)
-            idx = result.get("living_room_index", 1) - 1  # 转 0-based
-            idx = max(0, min(idx, len(sample) - 1))
-            confidence = result.get("confidence", "medium")
-            reason = result.get("reason", "")
-            logger.info("客厅识别完成: 第 %d 张 (%s), 置信度: %s — %s",
-                        idx + 1, sample[idx]["filename"], confidence, reason)
-            return sample[idx]
-        except Exception as e:
-            logger.warning("客厅识别失败 (attempt %d): %s", attempt, e)
-            if attempt >= COVER_MAX_RETRIES:
-                # 降级：取第一张图作为 fallback
-                logger.info("客厅识别降级：使用第一张图片")
-                return sample[0] if sample else None
-
-    return sample[0] if sample else None
-
-
-def _build_cover_prompt(property_data: dict) -> str:
-    """根据房源数据构建封面图生成 prompt（英文，图像模型对英文理解更好）。
-    Prompt 风格：精致高端但不失真实，让人有点进去看的欲望。"""
-    district = property_data.get("district", "")
-    sub = property_data.get("sub_district", "")
-    rooms = property_data.get("rooms", "?")
-    area = property_data.get("area_sqft", "?")
-    price = property_data.get("price_wan", "?")
-    renovation = property_data.get("renovation", "")
-    has_lift = property_data.get("has_lift", False)
-    highlights = property_data.get("highlights", [])
-
-    location = f"{district}{sub}".strip() if district else "Hong Kong Island"
-    room_desc = f"{rooms}-bedroom" if rooms else ""
-
-    # 价格锚点 → 定位等级
-    try:
-        price_val = int(price) if str(price).isdigit() else 0
-    except (ValueError, TypeError):
-        price_val = 0
-
-    if price_val >= 900:
-        tier = "a premium luxury apartment in one of Hong Kong's most sought-after neighborhoods"
-        vibe = "understated luxury — quality speaks through the space itself, not through flash"
-    elif price_val >= 600:
-        tier = "a high-quality comfortable home in a prime Hong Kong location"
-        vibe = "warm and aspirational — the kind of place people bookmark as their goal"
-    elif price_val >= 400:
-        tier = "a solid, well-located Hong Kong apartment with great value"
-        vibe = "cozy and inviting — practical but charming, a real home"
-    else:
-        tier = "a well-priced apartment in a desirable Hong Kong neighborhood"
-        vibe = "bright and cheerful — compact but full of potential, a smart choice"
-
-    # 装修加分
-    reno_bonus = ""
-    if renovation and any(kw in renovation for kw in ["装修", "翻新", "新裝", "全新"]):
-        reno_bonus = "It has been recently renovated with fresh finishes — make those clean surfaces and new details shine. "
-
-    # 电梯加分
-    lift_bonus = ""
-    if has_lift:
-        lift_bonus = ""
-
-    # 亮点提炼
-    hl_text = ""
-    if highlights:
-        clean_hl = [h for h in highlights[:2] if len(h) < 30]
-        if clean_hl:
-            hl_text = f"Notable features: {', '.join(clean_hl)}. "
-
-    prompt = (
-        f"Transform this raw living room photo into a warm, beautifully staged real estate cover image.\n\n"
-        f"CONTEXT:\n"
-        f"This is {tier}.\n"
-        f"Room type: {room_desc}, approximately {area} sq ft, priced around HKD {price}M.\n"
-        f"Location: {location}, Hong Kong.\n"
-        f"⚠️ The room is exactly {area} sq ft — this is a FIXED dimension. Do NOT make it look larger.\n"
-        f"Desired vibe: {vibe}.\n"
-        f"{reno_bonus}{hl_text}{lift_bonus}\n"
-        f"STAGING BRIEF:\n"
-        f"1. LIGHTING IS EVERYTHING — add warm, multi-layered light sources. Think table lamps glowing, a stylish floor lamp, warm overhead light. The room should feel COZY and illuminated, not dark or fluorescent.\n"
-        f"2. Do NOT widen or expand the room. You may slightly adjust the camera angle to show a better composition of what's ALREADY visible — but the room boundaries stay exactly as they are. If you can only see one corner, stay in that corner.\n"
-        f"3. Stage the room tastefully: add a rug to anchor the space if the floor feels bare, add curtain panels if windows are bare, add better lighting fixtures. Small accessories only — no major furniture additions.\n"
-        f"4. Use a warm, cohesive color palette: cream whites, rich wood, soft muted greens from 2-3 well-placed plants.\n"
-        f"5. The result should look like a professionally staged open house photo — warm, aspirational, and inviting.\n\n"
-        f"HARD RULES:\n"
-        f"- 🚫 DO NOT enlarge the room. {area} sq ft is the real size. Making it look bigger is a dealbreaker.\n"
-        f"- If the original photo only shows part of the room, present that part beautifully — do NOT invent more space.\n"
-        f"- NO text, NO watermarks, NO labels, NO Chinese characters.\n"
-        f"- 2-3 plants max. Not a jungle.\n"
-        f"- Must look like a REAL professional photograph, not 3D render or CGI.\n"
-        f"- Keep original wall colors, flooring, windows, and room layout. No fake windows. No moving walls.\n"
-        f"- Small staging accessories only (rug, lamp, curtains, throw pillows). No fake major furniture.\n"
-    )
-
-    return prompt
-
-
-def _call_gemini_image_gen(
-    image_path: str,
-    prompt: str,
-    api_key: str,
-) -> Optional[bytes]:
-    """
-    调用 Gemini 原生图像生成 API（image-to-image）。
-    发送客厅原图 + prompt，返回生成的封面图 bytes。
-    使用 gemini-2.5-flash-image 模型。
-    """
-    # 读取并编码输入图片
-    with open(image_path, "rb") as f:
-        image_bytes = f.read()
-    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-
-    ext = Path(image_path).suffix.lower()
-    mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
-    mime_type = mime_map.get(ext, "image/jpeg")
-
-    url = COVER_GEN_API.format(model=COVER_IMAGE_MODEL)
-    headers = {"Content-Type": "application/json"}
-    params = {"key": api_key}
-
-    body = {
-        "contents": [{
-            "parts": [
-                {"text": prompt},
-                {"inlineData": {"mimeType": mime_type, "data": image_b64}},
-            ],
-        }],
-        "generationConfig": {
-            "responseModalities": ["IMAGE", "TEXT"],
-            "temperature": COVER_TEMP,
-        },
-    }
-
-    for attempt in range(1, COVER_MAX_RETRIES + 1):
-        logger.info("封面图生成 第 %d/%d 次 (%s)...", attempt, COVER_MAX_RETRIES, COVER_IMAGE_MODEL)
-        try:
-            resp = requests.post(url, headers=headers, params=params, json=body, timeout=120)
-            if resp.status_code != 200:
-                logger.error("Gemini 图像 API 返回 %d: %s", resp.status_code, resp.text[:500])
-                if attempt >= COVER_MAX_RETRIES:
-                    return None
-                continue
-
-            data = resp.json()
-            # 解析响应，提取图片
-            candidates = data.get("candidates", [])
-            if not candidates:
-                logger.warning("Gemini 图像 API 返回空 candidates")
-                if attempt >= COVER_MAX_RETRIES:
-                    return None
-                continue
-
-            for candidate in candidates:
-                parts = candidate.get("content", {}).get("parts", [])
-                for part in parts:
-                    if "inlineData" in part:
-                        img_b64 = part["inlineData"].get("data", "")
-                        if img_b64:
-                            logger.info("封面图生成成功，大小: %.1f KB", len(img_b64) * 3 / 4 / 1024)
-                            return base64.b64decode(img_b64)
-                    # 打印文本部分用于调试
-                    if "text" in part:
-                        logger.debug("Gemini 文本响应: %s", part["text"][:200])
-
-            logger.warning("Gemini 图像 API 响应中未找到图片数据")
-            if attempt >= COVER_MAX_RETRIES:
-                return None
-
-        except requests.exceptions.Timeout:
-            logger.error("Gemini 图像 API 超时 (attempt %d)", attempt)
-        except Exception as e:
-            logger.error("Gemini 图像 API 异常 (attempt %d): %s", attempt, e)
-
-    return None
-
-
-def generate_cover(
-    property_data: dict,
-    output_dir: Path,
-    run_id: str,
-    api_key: str,
-) -> Optional[Path]:
-    """
-    封面图生成主流程：
-    1. 从房源图片中识别客厅照片
-    2. 用 Gemini 原生图像 API 基于客厅照片生成封面图
-    3. 保存到输出目录
-
-    返回生成的封面图路径，或 None（失败时不影响笔记生成）。
-    """
-    images = property_data.get("images", [])
-    if not images:
-        logger.warning("房源无图片，跳过封面图生成")
-        return None
-
-    # Step 1: 找客厅
-    living_room = _find_living_room_image(images, api_key)
-    if not living_room:
-        logger.warning("未找到客厅图片，跳过封面图生成")
-        return None
-
-    logger.info("选中客厅图片: %s", living_room["filename"])
-
-    # Step 2: 构建 prompt
-    cover_prompt = _build_cover_prompt(property_data)
-    logger.debug("封面图 prompt 长度: %d 字", len(cover_prompt))
-
-    # Step 3: 调用 Gemini 生成
-    image_data = _call_gemini_image_gen(living_room["abs_path"], cover_prompt, api_key)
-    if not image_data:
-        logger.warning("封面图生成失败")
-        return None
-
-    # Step 4: 保存封面图 + 原图副本（记录素材来源）
-    safe_name = sanitize_filename(property_data.get("name", "untitled"))
-    target_dir = Path(output_dir) / run_id / "pre-published" if output_dir else OUTPUTS_DIR / run_id / "pre-published"
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    cover_path = target_dir / f"{safe_name}_cover.png"
-    cover_path.write_bytes(image_data)
-    logger.info("封面图已保存: %s (%.1f KB)", cover_path, len(image_data) / 1024)
-
-    # 保存原图副本，记录封面图是拿哪张照片生成的
-    import shutil
-    src_ext = Path(living_room["abs_path"]).suffix.lower()
-    source_copy = target_dir / f"{safe_name}_cover_原图{src_ext}"
-    shutil.copy2(living_room["abs_path"], source_copy)
-    logger.info("封面素材原图已保存: %s", source_copy.name)
-
-    return cover_path
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -780,7 +437,7 @@ def _parse_info_md(text: str, dirname: str) -> Optional[dict]:
             break
 
     # Price
-    price_m = re.search(r"\$(\d+)\s*[万萬]", header)
+    price_m = re.search(r"\$?(\d+)\s*[万萬]", header)
     if price_m:
         data["price_wan"] = int(price_m.group(1))
 
@@ -839,6 +496,19 @@ def _parse_info_md(text: str, dirname: str) -> Optional[dict]:
         m = re.search(r"(?:地铁|地鐵|MTR|mtr)[：:]*\s*([一-鿿A-Za-z]+)", line)
         if m:
             data["mtr_station"] = m.group(1).strip()
+        # Lift in body lines
+        m_lift = re.search(r"(?:电梯|電梯)[：:]*\s*(.*)", line)
+        if m_lift:
+            val = m_lift.group(1).strip()
+            if any(x in val for x in ["没有", "无", "走楼梯"]):
+                data["has_lift"] = False
+                data["lift_type"] = "走楼梯"
+            else:
+                data["has_lift"] = True
+                if "平地" in val:
+                    data["lift_type"] = "平地电梯"
+                else:
+                    data["lift_type"] = "有电梯"
         # Renovation
         if re.search(r"裝修|装修|翻新", line):
             data["renovation"] = line
@@ -1068,6 +738,7 @@ def call_llm_strategy(strategy_prompt: str) -> str:
                 ],
                 temperature=0.5,
                 max_tokens=4096,
+                timeout=60,
             )
             raw = resp.choices[0].message.content.strip()
             # 剥离可能的代码块包裹
@@ -1090,6 +761,7 @@ def call_llm_strategy(strategy_prompt: str) -> str:
                         ],
                         temperature=0.5,
                         max_tokens=4096,
+                        timeout=60,
                     )
                     raw = resp.choices[0].message.content.strip()
                     if raw.startswith("```"):
@@ -1103,31 +775,6 @@ def call_llm_strategy(strategy_prompt: str) -> str:
 
     raise RuntimeError(f"策略规划失败，已重试 {MAX_RETRIES} 次")
 
-
-def save_strategy(
-    strategy_md: str,
-    property_name: str,
-    persona: str = "amateur",
-    run_id: Optional[str] = None,
-    output_dir: Optional[Path] = None,
-    property_data: Optional[dict] = None,
-    analyzed_notes: Optional[list[dict]] = None,
-) -> Path:
-    """保存行文思路 Markdown 到 {run_id}/pre-published/，末尾自动拼接关联素材。"""
-    base = Path(output_dir) if output_dir else OUTPUTS_DIR
-    run_id = run_id or get_run_id()
-    target_dir = base / run_id / "pre-published"
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    safe_name = sanitize_filename(property_name)
-    output_path = target_dir / f"{safe_name}_{persona}_strategy.md"
-
-    # Append 关联素材 section
-    full_content = strategy_md + _build_source_refs_section(output_path, property_data, analyzed_notes)
-
-    output_path.write_text(full_content, encoding="utf-8")
-    logger.info("行文思路已保存: %s", output_path)
-    return output_path
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1237,76 +884,150 @@ MOCK_PROPERTY = {
 
 
 # ═══════════════════════════════════════════════════════════════
+# 输出校验（程序化兜底——LLM 不一定听 system prompt，这里做最后一道关卡）
+# ═══════════════════════════════════════════════════════════════
+
+_BANNED_WORDS = [
+    "家人们", "谁懂啊", "绝绝子", "宝子们", "神仙", "笋盘", "宝藏楼盘", "绝了",
+    "冲它", "太香了", "手慢无", "YYDS", "天花板", "闭眼入", "真香", "宝藏",
+    "必入", "姐妹们", "谁懂", "宝藏小区", "梦中情房",
+]
+_BANNED_EMOJI = ["🔥", "💥", "😩", "🏃‍♂️", "💨"]
+_LEAN_BANNED_DECOR_WORDS = ["大理石", "轻奢", "奶油风", "ins风", "杂志风"]
+_MAX_EMOJI_COUNT = 5  # 硬性要求"最多3-4个"，留1个容差防止误杀旗帜符号等
+
+
+def _count_emoji(text: str) -> int:
+    """粗略统计文本中的 emoji 数量（非 BMP 字符 + 常见符号区间），不误算中文标点。"""
+    count = 0
+    for c in text:
+        cp = ord(c)
+        if cp > 0xFFFF:
+            count += 1
+        elif 0x2600 <= cp <= 0x27BF or cp == 0x2B50:
+            count += 1
+    return count
+
+
+def _validate_note(content: NoteContent, persona: str) -> list[str]:
+    """程序化校验 LLM 输出是否违反硬性规则。返回违规说明列表，空列表 = 通过。"""
+    issues: list[str] = []
+    title = content.hook_title or ""
+    body = (content.main_content or "").replace("\\n", "\n")
+    full_text = f"{title}\n{body}\n" + " ".join(content.seo_tags or [])
+
+    if not title.strip():
+        issues.append("标题为空")
+    elif len(title) > 20:
+        issues.append(f"标题超过20字（实际{len(title)}字）：{title}")
+
+    hit_words = [w for w in _BANNED_WORDS if w in full_text]
+    if hit_words:
+        issues.append(f"出现禁用词: {', '.join(hit_words)}")
+
+    hit_emoji = [e for e in _BANNED_EMOJI if e in full_text]
+    if hit_emoji:
+        issues.append(f"出现禁用 emoji: {', '.join(hit_emoji)}")
+
+    emoji_count = _count_emoji(full_text)
+    if emoji_count > _MAX_EMOJI_COUNT:
+        issues.append(f"emoji 数量过多（约{emoji_count}个，上限{_MAX_EMOJI_COUNT}）")
+
+    body_len = len(body.strip())
+    max_len = 300 if persona == "lean" else 400
+    if body_len > max_len:
+        issues.append(f"正文超过{max_len}字（实际{body_len}字）")
+
+    if re.search(r"地铁\s*0\s*分钟|出门就是地铁|通勤\s*\d+\s*分钟", full_text):
+        issues.append("出现不合规的距离/时间表述（地铁0分钟 / 出门就是地铁 / 通勤X分钟）")
+
+    if re.search(r"(^|[。！\n])\s*评论PM\s*([。！]|$)", body):
+        issues.append("CTA 过于简略，仅写了孤立的「评论PM」，没说明发什么")
+
+    if persona == "lean":
+        hit_decor = [w for w in _LEAN_BANNED_DECOR_WORDS if w in full_text]
+        if hit_decor:
+            issues.append(f"lean persona 出现禁止的装修风格词: {', '.join(hit_decor)}")
+        if re.search(r"楼龄.{0,10}\d|\d{2,3}\s*年.{0,5}楼龄", full_text):
+            issues.append("lean persona 提到了楼龄数字（致命伤，禁止作为缺点）")
+        if re.search(r"面积(太)?小|户型(太)?小", full_text):
+            issues.append("lean persona 提到了面积小/户型小（致命伤，禁止作为缺点）")
+        if re.search(r"按揭.{0,10}(不足|做不到|有限|年期短)", full_text):
+            issues.append("lean persona 提到了按揭做不足（致命伤，禁止作为缺点）")
+        if re.search(r"银行估价.{0,10}(不足|跟不上|有差距|偏低|差)", full_text):
+            issues.append("lean persona 提到了银行估价跟不上（致命伤，禁止作为缺点）")
+
+    return issues
+
+
+# ═══════════════════════════════════════════════════════════════
 # LLM 调用
 # ═══════════════════════════════════════════════════════════════
 
 def call_llm(user_prompt: str, persona: str = "amateur") -> NoteContent:
-    """调用 LLM 生成笔记，带重试和降级策略。"""
+    """调用 LLM 生成笔记，带重试、降级、程序化校验。
+
+    校验失败会触发重试（视为可恢复失败，与 JSON 解析失败同等对待）；
+    主模型重试耗尽后降级模型再试一次；最终仍未通过校验时，按容错策略
+    返回最后一次结果（带瑕疵但不让整个管线崩溃），并在日志中显著标出。
+    """
+    if persona not in PERSONA_CONFIG:
+        logger.warning("未知 persona '%s'，回退使用 amateur 的 system prompt", persona)
+
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
     persona_cfg = PERSONA_CONFIG.get(persona, PERSONA_CONFIG["amateur"])
     system_prompt = persona_cfg["system_prompt"]
 
+    last_result: Optional[NoteContent] = None
+    last_issues: list[str] = []
+
+    def _attempt(model_name: str) -> Optional[NoteContent]:
+        nonlocal last_result, last_issues
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.8,
+            max_tokens=8192,
+            timeout=90,
+        )
+        raw = resp.choices[0].message.content.strip()
+        result = _parse_response(raw)
+        issues = _validate_note(result, persona)
+        if not issues:
+            return result
+        logger.warning("生成内容未通过程序化校验: %s", "; ".join(issues))
+        last_result, last_issues = result, issues
+        return None
+
     for attempt in range(1, MAX_RETRIES + 1):
         logger.info("第 %d/%d 次生成中 (%s | %s)...", attempt, MAX_RETRIES, MODEL, persona_cfg["label"])
         try:
-            resp = client.chat.completions.create(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.8,
-                max_tokens=8192,
-            )
-            raw = resp.choices[0].message.content.strip()
-            logger.debug("原始响应前 200 字: %s", raw[:200])
-
-            return _parse_response(raw)
-
+            result = _attempt(MODEL)
+            if result is not None:
+                return result
         except json.JSONDecodeError as e:
             logger.warning("JSON 解析失败 (attempt %d): %s", attempt, e)
-            if attempt >= MAX_RETRIES:
-                # 降级模型试一次
-                fallback_model = "gemini-3.1-flash-lite"
-                logger.info("JSON 解析连续失败，降级模型: %s", fallback_model)
-                try:
-                    resp = client.chat.completions.create(
-                        model=fallback_model,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        temperature=0.8,
-                        max_tokens=8192,
-                    )
-                    raw = resp.choices[0].message.content.strip()
-                    return _parse_response(raw)
-                except Exception as e2:
-                    logger.error("降级模型也失败: %s", e2)
-                    raise
         except Exception as e:
             logger.error("API 调用异常 (attempt %d): %s", attempt, e)
-            if attempt >= MAX_RETRIES:
-                # 降级模型试一次
-                fallback_model = "gemini-3.1-flash-lite"
-                logger.info("降级模型: %s", fallback_model)
-                try:
-                    resp = client.chat.completions.create(
-                        model=fallback_model,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        temperature=0.8,
-                        max_tokens=8192,
-                    )
-                    raw = resp.choices[0].message.content.strip()
-                    return _parse_response(raw)
-                except Exception as e2:
-                    logger.error("降级模型也失败: %s", e2)
-                    raise
 
-    raise RuntimeError(f"LLM 生成失败，已重试 {MAX_RETRIES} 次")
+    fallback_model = "gemini-3.1-flash-lite"
+    logger.info("主模型多次未通过校验或失败，降级模型再试一次: %s", fallback_model)
+    try:
+        result = _attempt(fallback_model)
+        if result is not None:
+            return result
+    except Exception as e2:
+        logger.error("降级模型也失败: %s", e2)
+
+    if last_result is not None:
+        logger.error("⚠️ 已耗尽重试，仍未通过程序化校验，按容错策略返回最后一次结果（带瑕疵）: %s",
+                      "; ".join(last_issues))
+        return last_result
+
+    raise RuntimeError(f"LLM 生成失败，已重试 {MAX_RETRIES} 次且降级模型也失败")
 
 
 def _parse_response(raw: str) -> NoteContent:
@@ -1372,12 +1093,19 @@ def _parse_response(raw: str) -> NoteContent:
     else:
         raw_tags = []
 
+    raw_candidates = data.get("title_candidates", [])
+    if isinstance(raw_candidates, str):
+        raw_candidates = [raw_candidates]
+    elif not isinstance(raw_candidates, list):
+        raw_candidates = []
+
     return NoteContent(
         hook_title=data.get("hook_title", ""),
+        title_candidates=raw_candidates,
         main_content=data.get("main_content", ""),
         interactive_question=data.get("interactive_question", ""),
         seo_tags=raw_tags,
-        cover_suggestion=data.get("cover_suggestion", ""),
+        persona_note=data.get("persona_note", ""),
     )
 
 
@@ -1412,8 +1140,6 @@ def _build_source_refs_section(
     output_md_path: Path,
     property_data: Optional[dict] = None,
     analyzed_notes: Optional[list[dict]] = None,
-    strategy_path: Optional[Path] = None,
-    cover_path: Optional[Path] = None,
 ) -> str:
     """构建「📁 关联素材」Markdown 章节，生成相对于输出 md 文件的路径以便 Ctrl+点击跳转。"""
     lines = ["", "---", "", "## 📁 关联素材（Ctrl+点击跳转）", ""]
@@ -1424,17 +1150,6 @@ def _build_source_refs_section(
             return str(Path(os.path.relpath(target, output_md_path.parent)))
         except ValueError:
             return target  # fallback: 跨盘符时保留绝对路径
-
-    # ── 封面图 ──
-    if cover_path:
-        lines.append("### 🎨 AI 生成封面图")
-        lines.append(f'- [查看封面图]({rel(str(cover_path.resolve()))})')
-        # 查找同名的原图副本
-        cover_dir = cover_path.parent
-        for pattern in [f"{cover_path.stem}_原图.*"]:
-            for src in cover_dir.glob(pattern):
-                lines.append(f'- **封面素材原图**: [{src.name}]({rel(str(src.resolve()))})')
-        lines.append("")
 
     # ── 本房源素材 ──
     if property_data:
@@ -1458,12 +1173,6 @@ def _build_source_refs_section(
                 lines.append(f'- **小红书原文**: [{note.get("note_url","原文链接")[:60]}...]({note["note_url"]})')
         lines.append("")
 
-    # ── 行文思路（仅 pre-published） ──
-    if strategy_path:
-        lines.append("### 行文思路")
-        lines.append(f"- [查看策略规划]({rel(str(strategy_path.resolve()))})")
-        lines.append("")
-
     return "\n".join(lines)
 
 
@@ -1476,18 +1185,9 @@ def convert_to_markdown(content: NoteContent) -> str:
         "",
         content.main_content.replace("\\n", "\n"),
         "",
-        "---",
-        "",
-        content.interactive_question,
-        "",
     ]
     if tags:
-        lines.append(f"**标签**: {tags}")
-        lines.append("")
-    if content.cover_suggestion:
-        lines.append("---")
-        lines.append("")
-        lines.append(f"🎨 **封面图建议**: {content.cover_suggestion}")
+        lines.append(tags)
         lines.append("")
 
     return "\n".join(lines)
@@ -1501,8 +1201,6 @@ def save_pre_published(
     output_dir: Optional[Path] = None,
     property_data: Optional[dict] = None,
     analyzed_notes: Optional[list[dict]] = None,
-    strategy_path: Optional[Path] = None,
-    cover_path: Optional[Path] = None,
 ) -> Path:
     """将生成的笔记转为 Markdown 存入 {run_id}/pre-published/，末尾自动拼接关联素材。"""
     base = Path(output_dir) if output_dir else OUTPUTS_DIR
@@ -1515,8 +1213,8 @@ def save_pre_published(
 
     md_content = convert_to_markdown(content)
 
-    # Append 关联素材 + 行文思路
-    extra_lines = _build_source_refs_section(output_path, property_data, analyzed_notes, strategy_path, cover_path)
+    # Append 关联素材
+    extra_lines = _build_source_refs_section(output_path, property_data, analyzed_notes)
     full_content = md_content + extra_lines
 
     output_path.write_text(full_content, encoding="utf-8")
@@ -1536,14 +1234,13 @@ def run(
     run_id: Optional[str] = None,
     output_dir: Optional[Path] = None,
     skip_strategy: bool = False,
-    skip_cover: bool = False,
 ) -> NoteContent:
-    """主入口（三阶段管线）：策略规划 → 封面图生成 → 行文思路 MD → 笔记创作 → 草稿 + MD 发布稿。
+    """主入口（两阶段管线）：内部策略规划（不落盘） → 笔记创作 → 草稿 + MD 发布稿。
 
     支持三种 Persona:
       - "amateur": 素人视角，围绕具体房源记录分享
-      - "agent": 中介视角，推广房源引导私信
-      - "discussion": 讨论帖，纯素人观点/经历分享，不需要房源数据，不生成封面
+      - "agent": 中介视角，推广房源引导评论/私信
+      - "lean": 极简中介视角，简洁客观配表面痛点
     """
     persona_cfg = PERSONA_CONFIG.get(persona, PERSONA_CONFIG["amateur"])
     run_id = run_id or get_run_id()
@@ -1552,41 +1249,6 @@ def run(
     logger.info("  Persona: %s | Model: %s | Run: %s", persona_cfg["label"], MODEL, run_id)
     logger.info("=" * 50)
 
-    # ── discussion 模式：不需要房源，跳过封面和策略，直接创作讨论帖 ──
-    if persona == "discussion":
-        logger.info("讨论帖模式 — 无需房源数据，直接创作")
-        cover_path = None
-        strategy_md = ""
-        strategy_path = None
-        analyzed_notes: list[dict] = []
-
-        # 构建讨论帖 prompt
-        discussion_prompt = _build_discussion_prompt()
-
-        logger.info("─" * 40)
-        logger.info("【创作讨论帖】...")
-        try:
-            result = call_llm(discussion_prompt, persona=persona)
-        except Exception as e:
-            logger.error("生成失败: %s", e)
-            raise
-
-        draft_path = save_draft(result, persona=persona, run_id=run_id, output_dir=output_dir)
-        ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d_%H%M%S")
-        safe_name = f"discuss_{ts}"
-        md_path = save_pre_published(result, property_name=safe_name,
-                                     persona=persona, run_id=run_id, output_dir=output_dir,
-                                     property_data=None, analyzed_notes=analyzed_notes,
-                                     strategy_path=None, cover_path=None)
-
-        logger.info("─" * 50)
-        logger.info("生成完成")
-        logger.info("  标题: %s", result.hook_title)
-        logger.info("  标签: %s", ", ".join(result.seo_tags))
-        logger.info("  互动: %s", result.interactive_question)
-        logger.info("  MD: %s", md_path)
-        return result
-
     sop = sop_text or load_sop()
     refs = reference_notes or load_reference_notes()
     prop = property_data or load_property_raw()
@@ -1594,35 +1256,13 @@ def run(
     summary = _summarize_property(prop)
     logger.info("房源: %s", summary)
 
-    # ═══ 阶段 0：封面图生成（在策略规划之前，不依赖 LLM 笔记输出）═══
-    cover_path: Optional[Path] = None
-    if not skip_cover:
-        logger.info("─" * 40)
-        logger.info("【阶段 0/2】封面图生成...")
-        try:
-            cover_path = generate_cover(
-                property_data=prop,
-                output_dir=Path(output_dir) if output_dir else OUTPUTS_DIR,
-                run_id=run_id,
-                api_key=API_KEY,
-            )
-            if cover_path:
-                logger.info("封面图已生成: %s", cover_path)
-            else:
-                logger.warning("封面图生成失败，继续生成笔记...")
-        except Exception as e:
-            logger.error("封面图生成异常，继续生成笔记: %s", e)
-    else:
-        logger.info("【阶段 0/2】封面图生成已跳过 (--skip-cover)")
-
     strategy_md = ""
-    strategy_path: Optional[Path] = None
     analyzed_notes: list[dict] = []
 
     if not skip_strategy:
-        # ═══ 阶段 1：策略规划 ═══
+        # ═══ 阶段 1：内部策略规划（人群/钩子/留白/CTA，不落盘，仅用于指导创作）═══
         logger.info("─" * 40)
-        logger.info("【阶段 1/2】行前思路规划...")
+        logger.info("【阶段 1/2】内部策略规划（不输出文件）...")
         audience_segments = load_audience_segments()
         analyzed_notes = load_analyzed_notes(run_id=run_id)
         strategy_prompt = build_strategy_prompt(prop, audience_segments, analyzed_notes, persona)
@@ -1630,15 +1270,10 @@ def run(
 
         try:
             strategy_md = call_llm_strategy(strategy_prompt)
+            logger.info("内部策略规划完成（%d 字，未落盘）", len(strategy_md))
         except Exception as e:
             logger.error("策略规划失败，将继续直接生成: %s", e)
             strategy_md = ""
-
-        if strategy_md:
-            strategy_path = save_strategy(strategy_md, property_name=prop.get("name", "untitled"),
-                                          persona=persona, run_id=run_id, output_dir=output_dir,
-                                          property_data=prop, analyzed_notes=analyzed_notes)
-            logger.info("行文思路已保存: %s", strategy_path)
     else:
         logger.info("【阶段 1/2】策略规划已跳过 (--skip-strategy)")
 
@@ -1655,17 +1290,16 @@ def run(
         raise
 
     draft_path = save_draft(result, persona=persona, run_id=run_id, output_dir=output_dir)
+
     md_path = save_pre_published(result, property_name=prop.get("name", "untitled"),
                                  persona=persona, run_id=run_id, output_dir=output_dir,
-                                 property_data=prop, analyzed_notes=analyzed_notes,
-                                 strategy_path=strategy_path, cover_path=cover_path)
+                                 property_data=prop, analyzed_notes=analyzed_notes)
 
     logger.info("─" * 50)
     logger.info("生成完成")
     logger.info("  标题: %s", result.hook_title)
     logger.info("  标签: %s", ", ".join(result.seo_tags))
     logger.info("  互动: %s", result.interactive_question)
-    logger.info("  封面建议: %s", result.cover_suggestion[:100] if result.cover_suggestion else "(无)")
     logger.info("  正文预览: %s...", result.main_content[:100].replace("\n", " "))
     logger.info("  草稿: %s", draft_path)
     logger.info("  MD: %s", md_path)
@@ -1677,9 +1311,9 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Agent 3 — 小红书爆款图文生成器")
     parser.add_argument(
         "--persona",
-        choices=["amateur", "agent", "discussion"],
+        choices=["amateur", "agent", "lean"],
         default="amateur",
-        help="写作视角: amateur=素人记录分享, agent=中介推广获客, discussion=纯讨论帖(无需房源)",
+        help="写作视角: amateur=素人记录分享, agent=中介推广获客, lean=极简中介(简洁客观)",
     )
     parser.add_argument(
         "--output-dir",
@@ -1708,12 +1342,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-strategy",
         action="store_true",
-        help="跳过策略规划阶段，直接创作（保持向后兼容）",
-    )
-    parser.add_argument(
-        "--skip-cover",
-        action="store_true",
-        help="跳过封面图生成阶段（保持向后兼容）",
+        help="跳过内部策略规划阶段，直接创作（更快，但创作时缺少人群/钩子的前置规划）",
     )
     return parser.parse_args()
 
@@ -1723,27 +1352,19 @@ if __name__ == "__main__":
         args = _parse_args()
         count = args.count
 
-        # discussion 模式：无需房源数据，直接生成 N 篇讨论帖
-        if args.persona == "discussion":
-            for i in range(count):
-                logger.info("\n▸ 第 %d/%d 篇讨论帖", i + 1, count)
-                run(property_data=None, persona="discussion", run_id=args.run_id,
-                    output_dir=args.output_dir, skip_strategy=True, skip_cover=True)
-        else:
-            props = load_properties_from_dir(prop_dir=args.property_dir, shuffle=True)
-            if not props:
-                logger.warning("无真实房源，使用 mock")
-                props = [MOCK_PROPERTY]
+        props = load_properties_from_dir(prop_dir=args.property_dir, shuffle=True)
+        if not props:
+            logger.warning("无真实房源，使用 mock")
+            props = [MOCK_PROPERTY]
 
-            selected = props[:count]
-            if len(selected) < count:
-                logger.info("真实房源不足，仅生成 %d 篇", len(selected))
+        selected = props[:count]
+        if len(selected) < count:
+            logger.info("真实房源不足，仅生成 %d 篇", len(selected))
 
-            for i, prop in enumerate(selected):
-                logger.info("\n▸ 第 %d/%d 篇: %s", i + 1, len(selected), prop.get("name", "?"))
-                run(property_data=prop, persona=args.persona, run_id=args.run_id,
-                    output_dir=args.output_dir, skip_strategy=args.skip_strategy,
-                    skip_cover=args.skip_cover)
+        for i, prop in enumerate(selected):
+            logger.info("\n▸ 第 %d/%d 篇: %s", i + 1, len(selected), prop.get("name", "?"))
+            run(property_data=prop, persona=args.persona, run_id=args.run_id,
+                output_dir=args.output_dir, skip_strategy=args.skip_strategy)
 
     except KeyboardInterrupt:
         logger.info("用户中断")

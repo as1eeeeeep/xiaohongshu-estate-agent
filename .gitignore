@@ -8,9 +8,6 @@ __pycache__/
 .venv/
 venv/
 
-# 生成输出（太大了，不需要版本控制）
-04_outputs/
-
 # 下载的临时文件
 01_materials/viral_examples/
 
