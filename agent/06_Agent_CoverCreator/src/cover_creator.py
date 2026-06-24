@@ -459,6 +459,28 @@ def draw_text_with_shadow(draw, position, text, font, fill, shadow_fill):
     draw.text((x, y), text, font=font, fill=fill)
 
 
+def draw_wrapped_title(draw, position, text, font, max_width, line_height, fill, shadow_fill=None, max_lines=2):
+    """按 max_width 自动换行绘制标题，超过 max_lines 行则省略号截断，避免长标题溢出画布。
+
+    返回标题实际占用的总高度，调用者据此把副标题往下挪，避免重叠。
+    """
+    lines = wrap_text(text, font, max_width, draw)
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        last = lines[-1]
+        while last and draw.textbbox((0, 0), last + "…", font=font)[2] > max_width:
+            last = last[:-1]
+        lines[-1] = last + "…"
+    x, y = position
+    for line in lines:
+        if shadow_fill is not None:
+            draw_text_with_shadow(draw, (x, y), line, font, fill, shadow_fill)
+        else:
+            draw.text((x, y), line, font=font, fill=fill)
+        y += line_height
+    return len(lines) * line_height
+
+
 def region_luminance(image, box):
     crop = image.crop(box).resize((80, 80))
     r, g, b = ImageStat.Stat(crop).mean[:3]
@@ -496,9 +518,15 @@ def style_editorial(canvas, title, subtitle, config):
         alpha = int(82 * max(0, 1 - y / (height * 0.36)))
         draw.rectangle((0, y, int(width * 0.62), y + 1), fill=(255, 246, 232, alpha))
 
+    title_x = int(width * 0.055)
     title_y = int(height * 0.064)
-    subtitle_y = title_y + int(width * 0.078)
-    draw.text((int(width * 0.055), title_y), title, font=find_font(config, int(width * 0.052)), fill=fill)
+    title_font = find_font(config, int(width * 0.052))
+    title_max_width = int(width * 0.62) - title_x - int(width * 0.02)
+    title_height = draw_wrapped_title(
+        draw, (title_x, title_y), title, title_font, title_max_width,
+        line_height=int(width * 0.062), fill=fill,
+    )
+    subtitle_y = title_y + title_height + int(width * 0.016)
     if subtitle:
         draw.text(
             (int(width * 0.058), subtitle_y),
@@ -518,12 +546,19 @@ def style_vertical(canvas, title, subtitle, config):
         alpha = int(118 * ((x - (width - grad_w)) / grad_w))
         draw.rectangle((x, 0, x + 1, height), fill=(14, 18, 19, alpha))
 
-    title_font = find_font(config, int(width * 0.038))
+    y_start = int(height * 0.12)
+    available_height = int(height * 0.56)  # 留出底部副标题区域，避免竖排撞到 subtitle
+    default_advance = int(width * 0.046)
+    char_count = max(len(title), 1)
+    advance = min(default_advance, max(available_height // char_count, int(width * 0.02)))
+    title_font = find_font(config, min(int(width * 0.038), int(advance / 1.2)))
+    max_chars = max(available_height // advance, 1)
+    display_title = title if len(title) <= max_chars else title[: max(max_chars - 1, 1)] + "…"
     x = int(width * 0.89)
-    y = int(height * 0.12)
-    for char in title:
+    y = y_start
+    for char in display_title:
         draw_text_with_shadow(draw, (x, y), char, title_font, (245, 219, 174, 255), (0, 0, 0, 150))
-        y += int(width * 0.046)
+        y += advance
     if subtitle:
         parts = subtitle.replace("｜", "/").split("/")
         for index, part in enumerate(parts[:2]):
@@ -538,9 +573,16 @@ def style_cinematic_band(canvas, title, subtitle, config):
     band_y = int(height * 0.74)
     draw.rectangle((0, band_y, width, height), fill=(31, 30, 27, 150))
     draw.rectangle((int(width * 0.055), band_y + int(height * 0.035), int(width * 0.065), band_y + int(height * 0.165)), fill=(196, 157, 97, 235))
-    draw.text((int(width * 0.082), band_y + int(height * 0.045)), title, font=find_font(config, int(width * 0.047)), fill=(238, 226, 205, 255))
+    title_x = int(width * 0.082)
+    title_y = band_y + int(height * 0.045)
+    title_font = find_font(config, int(width * 0.047))
+    title_max_width = width - title_x - int(width * 0.04)
+    title_height = draw_wrapped_title(
+        draw, (title_x, title_y), title, title_font, title_max_width,
+        line_height=int(height * 0.06), fill=(238, 226, 205, 255),
+    )
     if subtitle:
-        draw.text((int(width * 0.084), band_y + int(height * 0.13)), subtitle.replace("｜", " / "), font=find_font(config, int(width * 0.018)), fill=(214, 198, 174, 235))
+        draw.text((int(width * 0.084), title_y + title_height + int(height * 0.01)), subtitle.replace("｜", " / "), font=find_font(config, int(width * 0.018)), fill=(214, 198, 174, 235))
     canvas.alpha_composite(overlay)
 
 
@@ -555,8 +597,13 @@ def style_xhs_sticker(canvas, title, subtitle, config):
     draw.text((x + int(width * 0.018), y + int(height * 0.016)), "真实房源｜精装客厅", font=find_font(config, int(width * 0.018)), fill=(47, 78, 59, 255))
     fill, shadow = choose_text_palette(image, (x, y + int(height * 0.12), x + int(width * 0.48), y + int(height * 0.30)), "green")
     title_y = y + int(height * 0.125)
-    subtitle_y = title_y + int(width * 0.082)
-    draw_text_with_shadow(draw, (x, title_y), title, find_font(config, int(width * 0.058)), fill, shadow)
+    title_font = find_font(config, int(width * 0.058))
+    title_max_width = width - x - int(width * 0.06)
+    title_height = draw_wrapped_title(
+        draw, (x, title_y), title, title_font, title_max_width,
+        line_height=int(width * 0.068), fill=fill, shadow_fill=shadow,
+    )
+    subtitle_y = title_y + title_height + int(width * 0.014)
     if subtitle:
         draw_text_with_shadow(draw, (x + 2, subtitle_y), subtitle, find_font(config, int(width * 0.022)), (70, 94, 75, 245), (255, 255, 255, 130))
     canvas.alpha_composite(overlay)
