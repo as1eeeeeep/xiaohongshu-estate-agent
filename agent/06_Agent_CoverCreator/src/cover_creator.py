@@ -656,14 +656,18 @@ def run(args):
 
     retry_instruction = getattr(args, "retry_instruction", "") or ""
     qa = None
-    for attempt in range(1, config.get("max_renovation_attempts", 1) + 1):
+    if args.skip_qa:
         renovate_image(client, provider, source_image, selection, config, no_text_path, retry_instruction, args.decor_style)
-        qa = review_renovation(client, provider, source_image, no_text_path, config)
-        if args.debug_json:
-            write_json(output_dir / f"qa_attempt_{attempt}.json", qa)
-        if qa.get("pass") is True:
-            break
-        retry_instruction = qa.get("retry_instruction") or "; ".join(qa.get("violations", []))
+        print("QA skipped (--skip-qa): renovated image written without automated red-line review.", file=sys.stderr)
+    else:
+        for attempt in range(1, config.get("max_renovation_attempts", 1) + 1):
+            renovate_image(client, provider, source_image, selection, config, no_text_path, retry_instruction, args.decor_style)
+            qa = review_renovation(client, provider, source_image, no_text_path, config)
+            if args.debug_json:
+                write_json(output_dir / f"qa_attempt_{attempt}.json", qa)
+            if qa.get("pass") is True:
+                break
+            retry_instruction = qa.get("retry_instruction") or "; ".join(qa.get("violations", []))
     if qa and qa.get("pass") is not True:
         print("Needs manual review: automated QA did not pass.", file=sys.stderr)
         if args.debug_json:
@@ -744,6 +748,13 @@ def parse_args():
              "never overrides the red-line rules in prompts/renovate.md.",
     )
     parser.add_argument("--debug-json", action="store_true", help="Write internal selection and QA JSON files.")
+    parser.add_argument(
+        "--skip-qa",
+        action="store_true",
+        help="Skip the automated red-line QA call entirely (one fewer API round-trip). "
+             "The renovated image is written and published as-is; the human operator "
+             "is responsible for checking red-line compliance manually.",
+    )
     parser.add_argument(
         "--run-id",
         default=None,
