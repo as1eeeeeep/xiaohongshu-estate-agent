@@ -677,11 +677,13 @@ def run(args):
             property_name = Path(args.input_dir).name
             publish_dir = OUTPUTS_DIR / args.run_id / "pre-published"
             publish_dir.mkdir(parents=True, exist_ok=True)
-            published_cover = publish_dir / f"{property_name}_cover.png"
+            published_original = publish_dir / f"{property_name}_original{selected_copy.suffix.lower()}"
             published_clean = publish_dir / f"{property_name}_cover_clean.png"
-            shutil.copy2(final_cover_path, published_cover)
+            published_cover = publish_dir / f"{property_name}_cover.png"
+            shutil.copy2(selected_copy, published_original)
             shutil.copy2(no_text_path, published_clean)
-            print(f"Cover copied alongside Agent3 note: {published_cover}")
+            shutil.copy2(final_cover_path, published_cover)
+            print(f"Cover (+ original + clean) copied alongside Agent3 note: {published_cover}")
 
 
 def parse_args():

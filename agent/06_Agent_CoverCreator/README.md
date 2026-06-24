@@ -106,13 +106,14 @@ cd "/Users/asleep/松鼠找房/agent"
 ## 与 Agent3 笔记放在一起（`--run-id`）
 
 加 `--run-id <YYYYMMDD_HHMM>`（与跑 Agent3 时用的同一个 run_id），红线质检**通过**后会
-把最终封面额外复制一份到 Agent3 笔记所在的同一个文件夹：
+把三张图额外复制一份到 Agent3 笔记所在的同一个文件夹：
 
 ```text
 04_outputs/<run-id>/pre-published/
   <property_name>_<persona>.md         # Agent3 笔记
-  <property_name>_cover.png            # 本次复制的最终封面
-  <property_name>_cover_clean.png      # 对应的纯装修无字图
+  <property_name>_original.jpg         # 原始实拍图（未经任何处理）
+  <property_name>_cover_clean.png      # AI 装修后的纯图（无文字）
+  <property_name>_cover.png            # 装修图叠加标题/副标题后的最终封面
 ```
 
 `<property_name>` 取自 `input_dir` 的文件夹名，必须与该房源在 `01_materials/properties/`
