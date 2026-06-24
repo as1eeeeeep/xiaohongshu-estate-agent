@@ -509,25 +509,6 @@ def style_editorial(canvas, title, subtitle, config):
     canvas.alpha_composite(overlay)
 
 
-def style_soft_card(canvas, title, subtitle, config):
-    width, height = canvas.size
-    overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-    x, y = int(width * 0.045), int(height * 0.68)
-    card_w, card_h = int(width * 0.45), int(height * 0.20)
-    draw.rounded_rectangle(
-        (x, y, x + card_w, y + card_h),
-        radius=10,
-        fill=(246, 239, 226, 224),
-        outline=(222, 205, 184, 210),
-        width=2,
-    )
-    draw.text((x + int(width * 0.025), y + int(height * 0.035)), title, font=find_font(config, int(width * 0.043)), fill=(91, 64, 45, 255))
-    if subtitle:
-        draw.text((x + int(width * 0.026), y + int(height * 0.115)), subtitle, font=find_font(config, int(width * 0.020)), fill=(120, 91, 68, 245))
-    canvas.alpha_composite(overlay)
-
-
 def style_vertical(canvas, title, subtitle, config):
     width, height = canvas.size
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
@@ -583,7 +564,6 @@ def style_xhs_sticker(canvas, title, subtitle, config):
 
 COVER_STYLES = {
     "editorial": style_editorial,
-    "card": style_soft_card,
     "vertical": style_vertical,
     "band": style_cinematic_band,
     "xhs": style_xhs_sticker,

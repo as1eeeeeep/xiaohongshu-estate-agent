@@ -45,7 +45,6 @@ mkdir -p input/listing-001
 
 ```bash
 --cover-style editorial  # 咖啡色杂志感，默认，标题和副标题已加大上下间距
---cover-style card       # 陶土棕柔卡片
 --cover-style vertical   # 香槟金竖排
 --cover-style band       # 石墨黑 + 暖金底部条
 --cover-style xhs        # 橄榄绿小红书感，标题和副标题已加大上下间距
@@ -93,7 +92,6 @@ cd "/Users/asleep/松鼠找房/agent"
   renovated_no_text.png
   final_cover.png
   final_cover_editorial.png  # 仅在 --style-variants 时输出
-  final_cover_card.png
   final_cover_vertical.png
   final_cover_band.png
   final_cover_xhs.png
