@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import base64
+import io
 import json
 import mimetypes
 import os
@@ -40,15 +41,40 @@ def load_dotenv():
             os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
+MAX_UPLOAD_BYTES = 4 * 1024 * 1024  # 超过此大小才压缩，避免手机原图(数十MB)拖慢/卡死上传
+MAX_UPLOAD_DIMENSION = 2048  # 压缩时的最长边像素上限
+
+
+def _load_for_upload(path):
+    """读取图片字节用于喂给视觉模型（选图/装修/质检）。
+
+    只影响传给模型理解用的字节，不修改磁盘原文件；最终输出仍以
+    match_source_geometry() 读取的原始 source_image 尺寸为基准还原，
+    所以压缩不会影响红线规则里"不改变画面比例"的要求。
+    """
+    raw = path.read_bytes()
+    if len(raw) <= MAX_UPLOAD_BYTES:
+        return raw, mimetypes.guess_type(path.name)[0] or "image/jpeg"
+
+    image = Image.open(io.BytesIO(raw)).convert("RGB")
+    width, height = image.size
+    if max(width, height) > MAX_UPLOAD_DIMENSION:
+        scale = MAX_UPLOAD_DIMENSION / max(width, height)
+        image = image.resize((round(width * scale), round(height * scale)), Image.LANCZOS)
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=85)
+    return buffer.getvalue(), "image/jpeg"
+
+
 def image_to_data_url(path):
-    mime = mimetypes.guess_type(path.name)[0] or "image/jpeg"
-    data = base64.b64encode(path.read_bytes()).decode("utf-8")
-    return f"data:{mime};base64,{data}"
+    data, mime = _load_for_upload(path)
+    encoded = base64.b64encode(data).decode("utf-8")
+    return f"data:{mime};base64,{encoded}"
 
 
 def image_part(path):
-    mime = mimetypes.guess_type(path.name)[0] or "image/png"
-    return types.Part.from_bytes(data=path.read_bytes(), mime_type=mime)
+    data, mime = _load_for_upload(path)
+    return types.Part.from_bytes(data=data, mime_type=mime)
 
 
 def list_images(input_dir):
@@ -595,7 +621,16 @@ def run(args):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     client, provider = create_client(config)
-    selection = select_cover_image(client, provider, images, config)
+    if getattr(args, "image_index", None) is not None:
+        selection = {
+            "image_index": args.image_index,
+            "room_type": getattr(args, "room_type", None) or "living_room",
+            "confidence": "high",
+            "reason": "Forced via command line parameter."
+        }
+    else:
+        selection = select_cover_image(client, provider, images, config)
+        
     if args.debug_json:
         write_json(output_dir / "selection.json", selection)
 
@@ -619,7 +654,7 @@ def run(args):
     no_text_path = output_dir / "renovated_no_text.png"
     final_cover_path = output_dir / "final_cover.png"
 
-    retry_instruction = ""
+    retry_instruction = getattr(args, "retry_instruction", "") or ""
     qa = None
     for attempt in range(1, config.get("max_renovation_attempts", 1) + 1):
         renovate_image(client, provider, source_image, selection, config, no_text_path, retry_instruction, args.decor_style)
@@ -675,11 +710,12 @@ def run(args):
             )
         else:
             property_name = Path(args.input_dir).name
+            base_name = f"{property_name}_{args.note_suffix}" if args.note_suffix else property_name
             publish_dir = OUTPUTS_DIR / args.run_id / "pre-published"
             publish_dir.mkdir(parents=True, exist_ok=True)
-            published_original = publish_dir / f"{property_name}_original{selected_copy.suffix.lower()}"
-            published_clean = publish_dir / f"{property_name}_cover_clean.png"
-            published_cover = publish_dir / f"{property_name}_cover.png"
+            published_original = publish_dir / f"{base_name}_original{selected_copy.suffix.lower()}"
+            published_clean = publish_dir / f"{base_name}_cover_clean.png"
+            published_cover = publish_dir / f"{base_name}_cover.png"
             shutil.copy2(selected_copy, published_original)
             shutil.copy2(no_text_path, published_clean)
             shutil.copy2(final_cover_path, published_cover)
@@ -711,11 +747,32 @@ def parse_args():
     parser.add_argument(
         "--run-id",
         default=None,
-        help="Pipeline run id (YYYYMMDD_HHMM) shared with Agent3. When set, the final cover "
-             "(and its clean no-text version) is also copied into "
-             "04_outputs/<run-id>/pre-published/<property_name>_cover[.{_clean}].png, "
-             "next to the Agent3 note for that same property, so an operator finds the "
-             "note and its cover in one folder instead of two.",
+        help="Pipeline run id (YYYYMMDD_HHMM) shared with Agent3.",
+    )
+    parser.add_argument(
+        "--note-suffix",
+        default=None,
+        help="Suffix appended to the published filename when --run-id is set "
+             "(e.g. the Agent3 persona: 'agent', 'lean'). Required when the same "
+             "property is rendered more than once in the same run, otherwise the "
+             "later run's _cover.png/_cover_clean.png/_original.* silently "
+             "overwrite the earlier one's in pre-published/.",
+    )
+    parser.add_argument(
+        "--retry-instruction",
+        default="",
+        help="Custom retry instruction to guide the AI renovation step.",
+    )
+    parser.add_argument(
+        "--image-index",
+        type=int,
+        default=None,
+        help="Force select a specific image index (1-based) as the cover bottom image, bypassing automatic selection.",
+    )
+    parser.add_argument(
+        "--room-type",
+        default=None,
+        help="Override the room type for the selected image (living_room, bedroom, dining, kitchen).",
     )
     return parser.parse_args()
 
