@@ -52,9 +52,16 @@ python 03_Agent_Generator/writer.py --persona <amateur|agent|lean> --count N [--
 （`generate_cover()` / `_find_living_room_image()` / `_build_cover_prompt()` 等均已不存在）。
 
 这个独立生图 agent 已经落地在 `06_Agent_CoverCreator/`（选图 → AI 装修生图 → 红线质检
-重试 → 本地排版加字，5种封面风格）。调用方式见该目录下的 `README.md`，统一入口是
-`06_Agent_CoverCreator/run.sh`，Codex 和 Claude Code 都应该调这个脚本，不要手写复刻它的
-prompt 逻辑——原因和 Agent3 禁止手写模仿一样：脚本是确定性的，手写会导致风格漂移。
+重试 → 本地排版加字，4种封面风格：editorial/vertical/band/xhs，card 已下线）。调用方式见
+该目录下的 `README.md`，统一入口是 `06_Agent_CoverCreator/run.sh`，Codex 和 Claude Code
+都应该调这个脚本，不要手写复刻它的 prompt 逻辑——原因和 Agent3 禁止手写模仿一样：脚本是
+确定性的，手写会导致风格漂移。
+
+同一房源要生成多个版本（不同 persona / 不同 `--decor-style`）时，每次调用必须传不同的
+`--note-suffix`，否则后一次会原地覆盖前一次在 `pre-published/` 里的图（真实出现过的 bug，
+代码已加保护但调用方仍要主动传）。赶时间且不需要自动红线质检时可以加 `--skip-qa`
+（省一次 API round-trip，调用者自己承担质检责任）。加字函数已支持长标题自动换行/截断，
+不会再溢出画布——但这是兜底，标题本身仍应控制在 20 字以内。
 如果 Claude Code 报 `ENOENT: Bun could not find a file`，通常是当前工作目录不在
 `/Users/asleep/松鼠找房/agent` 导致相对路径找不到。改用绝对路径调用：
 `/Users/asleep/松鼠找房/agent/06_Agent_CoverCreator/run.sh ...`。
