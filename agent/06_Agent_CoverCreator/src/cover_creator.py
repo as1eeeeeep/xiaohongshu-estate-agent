@@ -63,10 +63,43 @@ def list_images(input_dir):
 
 def extract_json(text):
     start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
+    if start == -1:
         raise ValueError(f"Model did not return JSON: {text}")
-    return json.loads(text[start : end + 1])
+    
+    count = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        char = text[i]
+        if escape:
+            escape = False
+            continue
+        if char == '\\':
+            escape = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if not in_string:
+            if char == '{':
+                count += 1
+            elif char == '}':
+                count -= 1
+                if count == 0:
+                    try:
+                        return json.loads(text[start : i + 1])
+                    except json.JSONDecodeError:
+                        pass
+                        
+    # Fallback to simple rfind
+    end = text.rfind("}")
+    if end != -1 and end > start:
+        try:
+            return json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            pass
+            
+    raise ValueError(f"Model did not return JSON: {text}")
 
 
 def response_text(response):
@@ -234,23 +267,30 @@ def normalize_selection(selection):
     return selection
 
 
-def build_renovation_prompt(room_type):
+def build_renovation_prompt(room_type, decor_style=None):
     base_prompt = load_text(ROOT / "prompts" / "renovate.md")
-    return (
+    prompt = (
         f"{base_prompt}\n\n"
         f"当前房间类型是：{room_type}。\n"
         "严格只应用该房间类型对应的软装指引，禁止跨类型混搭。"
     )
+    if decor_style:
+        prompt += (
+            f"\n\n本次整体装修风格基调：{decor_style}。"
+            "在不违反以上所有红线规则的前提下，只通过地面/台面/墙面材质质感和软装搭配体现"
+            "该风格，不能为了风格效果而放大房间、遮挡窗户、改变户型或添加文字水印。"
+        )
+    return prompt
 
 
-def renovate_image(client, provider, source_image, selection, config, output_path, retry_instruction=""):
+def renovate_image(client, provider, source_image, selection, config, output_path, retry_instruction="", decor_style=None):
     if provider == "gemini":
-        return renovate_image_gemini(client, source_image, selection, config, output_path, retry_instruction)
-    return renovate_image_openai(client, source_image, selection, config, output_path, retry_instruction)
+        return renovate_image_gemini(client, source_image, selection, config, output_path, retry_instruction, decor_style)
+    return renovate_image_openai(client, source_image, selection, config, output_path, retry_instruction, decor_style)
 
 
-def renovation_prompt_with_retry(selection, retry_instruction=""):
-    prompt = build_renovation_prompt(selection["room_type"])
+def renovation_prompt_with_retry(selection, retry_instruction="", decor_style=None):
+    prompt = build_renovation_prompt(selection["room_type"], decor_style)
     if retry_instruction:
         prompt = (
             f"{prompt}\n\n"
@@ -260,8 +300,8 @@ def renovation_prompt_with_retry(selection, retry_instruction=""):
     return prompt
 
 
-def renovate_image_openai(client, source_image, selection, config, output_path, retry_instruction=""):
-    prompt = renovation_prompt_with_retry(selection, retry_instruction)
+def renovate_image_openai(client, source_image, selection, config, output_path, retry_instruction="", decor_style=None):
+    prompt = renovation_prompt_with_retry(selection, retry_instruction, decor_style)
     with source_image.open("rb") as image_file:
         result = client.images.edit(
             model=config["image_model"],
@@ -276,10 +316,10 @@ def renovate_image_openai(client, source_image, selection, config, output_path, 
     match_source_geometry(output_path, source_image)
 
 
-def renovate_image_gemini(client, source_image, selection, config, output_path, retry_instruction=""):
+def renovate_image_gemini(client, source_image, selection, config, output_path, retry_instruction="", decor_style=None):
     aspect_ratio = closest_aspect_ratio(source_image)
     prompt = (
-        f"{renovation_prompt_with_retry(selection, retry_instruction)}\n\n"
+        f"{renovation_prompt_with_retry(selection, retry_instruction, decor_style)}\n\n"
         f"输出必须保持和原图一致的画面方向与宽高比例，使用 {aspect_ratio} 构图。"
     )
     response = with_retries(
@@ -580,7 +620,7 @@ def run(args):
     retry_instruction = ""
     qa = None
     for attempt in range(1, config.get("max_renovation_attempts", 1) + 1):
-        renovate_image(client, provider, source_image, selection, config, no_text_path, retry_instruction)
+        renovate_image(client, provider, source_image, selection, config, no_text_path, retry_instruction, args.decor_style)
         qa = review_renovation(client, provider, source_image, no_text_path, config)
         if args.debug_json:
             write_json(output_dir / f"qa_attempt_{attempt}.json", qa)
@@ -599,13 +639,18 @@ def run(args):
                 },
             )
 
+    selected_cover_style = args.cover_style or config.get("default_cover_style", "editorial")
+    if selected_cover_style == "random":
+        import random
+        selected_cover_style = random.choice(list(COVER_STYLES.keys()))
+        print(f"No cover style specified. Randomly selected: {selected_cover_style}")
     create_text_cover(
         no_text_path,
         final_cover_path,
         args.title or config["default_title"],
         args.subtitle or config["default_subtitle"],
         config,
-        cover_style=args.cover_style or config.get("default_cover_style", "editorial"),
+        cover_style=selected_cover_style,
     )
     if args.style_variants:
         create_style_variants(
@@ -628,11 +673,19 @@ def parse_args():
     parser.add_argument("--subtitle", help="Cover subtitle text for the final text overlay.")
     parser.add_argument(
         "--cover-style",
-        choices=sorted(COVER_STYLES),
+        choices=sorted(COVER_STYLES) + ["random"],
         default=None,
-        help="Final cover text style. Defaults to tuned editorial coffee style.",
+        help="Final cover text style. Defaults to tuned editorial coffee style. "
+             "Use 'random' to pick one of the five styles at random.",
     )
     parser.add_argument("--style-variants", action="store_true", help="Also write all five tuned text style variants.")
+    parser.add_argument(
+        "--decor-style",
+        default=None,
+        help="Optional decor style tag for the AI renovation step (e.g. '大理石'). "
+             "Applied as a material/finish theme on top of the room-type guidance; "
+             "never overrides the red-line rules in prompts/renovate.md.",
+    )
     parser.add_argument("--debug-json", action="store_true", help="Write internal selection and QA JSON files.")
     return parser.parse_args()
 

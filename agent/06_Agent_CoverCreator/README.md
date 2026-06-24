@@ -51,6 +51,9 @@ mkdir -p input/listing-001
 --cover-style xhs        # 橄榄绿小红书感，标题和副标题已加大上下间距
 ```
 
+也可以加 `--decor-style "大理石"` 之类的装修风格基调，会注入到 AI 装修生图的 prompt 里，
+在不违反红线规则的前提下通过材质和软装体现该风格（不指定则按房间类型默认软装方案）。
+
 需要一次输出 5 个候选版本时：
 
 ```bash
@@ -73,6 +76,14 @@ cd "/Users/asleep/松鼠找房/agent"
 ```
 
 只要输入图、标题、副标题、`config.json`、`prompts/`、`.env` 和 `.venv` 一样，两个工具调用出来的流程和版式会一致。Gemini 生图本身不是像素级确定性的，所以装修图可能会有轻微差别；本地加字风格是确定性的，同一张 `renovated_no_text.png` 会得到同样的 `final_cover.png`。
+
+如果 Claude Code 报 `ENOENT: Bun could not find a file`，优先用绝对路径调用：
+
+```bash
+/Users/asleep/松鼠找房/agent/06_Agent_CoverCreator/run.sh /Users/asleep/松鼠找房/agent/06_Agent_CoverCreator/input/listing-001 \
+  --title "香港质感小家" \
+  --subtitle "精装客厅｜明亮窗景"
+```
 
 输出会写入：
 

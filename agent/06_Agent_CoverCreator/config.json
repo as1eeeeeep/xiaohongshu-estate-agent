@@ -7,7 +7,7 @@
   "image_quality": "high",
   "output_size": "1536x1024",
   "max_renovation_attempts": 2,
-  "default_cover_style": "editorial",
+  "default_cover_style": "random",
   "default_title": "香港质感小家",
   "default_subtitle": "真实房源｜杂志感室内",
   "font_candidates": [

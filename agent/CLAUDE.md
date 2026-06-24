@@ -55,3 +55,6 @@ python 03_Agent_Generator/writer.py --persona <amateur|agent|lean> --count N [--
 重试 → 本地排版加字，5种封面风格）。调用方式见该目录下的 `README.md`，统一入口是
 `06_Agent_CoverCreator/run.sh`，Codex 和 Claude Code 都应该调这个脚本，不要手写复刻它的
 prompt 逻辑——原因和 Agent3 禁止手写模仿一样：脚本是确定性的，手写会导致风格漂移。
+如果 Claude Code 报 `ENOENT: Bun could not find a file`，通常是当前工作目录不在
+`/Users/asleep/松鼠找房/agent` 导致相对路径找不到。改用绝对路径调用：
+`/Users/asleep/松鼠找房/agent/06_Agent_CoverCreator/run.sh ...`。
