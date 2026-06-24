@@ -9,7 +9,6 @@ Agent 3 — 爆款图文生成器 (Writer)
 """
 
 import argparse
-import os
 import random
 import re
 import sys
@@ -1136,46 +1135,6 @@ def save_draft(content: NoteContent, persona: str = "amateur", run_id: Optional[
 # Markdown 转换 & pre-published 输出
 # ═══════════════════════════════════════════════════════════════
 
-def _build_source_refs_section(
-    output_md_path: Path,
-    property_data: Optional[dict] = None,
-    analyzed_notes: Optional[list[dict]] = None,
-) -> str:
-    """构建「📁 关联素材」Markdown 章节，生成相对于输出 md 文件的路径以便 Ctrl+点击跳转。"""
-    lines = ["", "---", "", "## 📁 关联素材（Ctrl+点击跳转）", ""]
-
-    def rel(target: str) -> str:
-        """将绝对路径转为相对于 output_md_path 所在目录的路径。"""
-        try:
-            return str(Path(os.path.relpath(target, output_md_path.parent)))
-        except ValueError:
-            return target  # fallback: 跨盘符时保留绝对路径
-
-    # ── 本房源素材 ──
-    if property_data:
-        lines.append("### 本房源素材")
-        if property_data.get("info_md_path"):
-            lines.append(f'- **房源信息**: [查看 info.md]({rel(property_data["info_md_path"])})')
-        images = property_data.get("images", [])
-        if images:
-            lines.append(f"- **房源图片** ({len(images)} 张):")
-            for img in images:
-                lines.append(f'  - [{img["filename"]}]({rel(img["abs_path"])})')
-        lines.append("")
-
-    # ── 参考爆款笔记 ──
-    if analyzed_notes:
-        lines.append("### 参考爆款笔记")
-        for note in analyzed_notes[:3]:  # 最多列 3 条
-            if note.get("source_absolute_path"):
-                lines.append(f'- **Agent2 分析**: [{note["source_file"]}]({rel(note["source_absolute_path"])})')
-            if note.get("note_url"):
-                lines.append(f'- **小红书原文**: [{note.get("note_url","原文链接")[:60]}...]({note["note_url"]})')
-        lines.append("")
-
-    return "\n".join(lines)
-
-
 def convert_to_markdown(content: NoteContent) -> str:
     """将 NoteContent 转为可发布的 Markdown 字符串。"""
     tags = " ".join(f"#{t}" for t in content.seo_tags) if content.seo_tags else ""
@@ -1199,10 +1158,8 @@ def save_pre_published(
     persona: str = "amateur",
     run_id: Optional[str] = None,
     output_dir: Optional[Path] = None,
-    property_data: Optional[dict] = None,
-    analyzed_notes: Optional[list[dict]] = None,
 ) -> Path:
-    """将生成的笔记转为 Markdown 存入 {run_id}/pre-published/，末尾自动拼接关联素材。"""
+    """将生成的笔记转为 Markdown 存入 {run_id}/pre-published/（仅标题/正文/标签）。"""
     base = Path(output_dir) if output_dir else OUTPUTS_DIR
     run_id = run_id or get_run_id()
     target_dir = base / run_id / "pre-published"
@@ -1213,11 +1170,7 @@ def save_pre_published(
 
     md_content = convert_to_markdown(content)
 
-    # Append 关联素材
-    extra_lines = _build_source_refs_section(output_path, property_data, analyzed_notes)
-    full_content = md_content + extra_lines
-
-    output_path.write_text(full_content, encoding="utf-8")
+    output_path.write_text(md_content, encoding="utf-8")
     logger.info("Markdown 已发布: %s", output_path)
     return output_path
 
@@ -1292,8 +1245,7 @@ def run(
     draft_path = save_draft(result, persona=persona, run_id=run_id, output_dir=output_dir)
 
     md_path = save_pre_published(result, property_name=prop.get("name", "untitled"),
-                                 persona=persona, run_id=run_id, output_dir=output_dir,
-                                 property_data=prop, analyzed_notes=analyzed_notes)
+                                 persona=persona, run_id=run_id, output_dir=output_dir)
 
     logger.info("─" * 50)
     logger.info("生成完成")

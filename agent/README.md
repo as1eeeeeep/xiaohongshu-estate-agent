@@ -110,9 +110,9 @@ if "灣仔尚翘峰" in img["filename"] and re.search(r'(?<!\d)2\.jpg$', img["fi
 - **超时设置**：策略分析 `timeout=60` 秒，笔记正文生成 `timeout=90` 秒。
 - **降级模型**：主模型为 `gemini-2.5-pro`。如果主模型连续 3 次超时或 JSON 解析失败，则**自动降级使用 `gemini-3.1-flash-lite`** 重新请求，保证流水线不中断。
 
-### 5. 输出规范与关联素材拼接 (Relative Path Links)
-在输出的 `{property_name}_{persona}_strategy.md` (策略文件) 和 `{property_name}_{persona}.md` (正文文件) 底部，保存函数会自动通过 `os.path.relpath()` 拼接「📁 关联素材」小节。
-- 相对路径必须从输出 md 文件夹向上追溯到根目录再指回目标文件（例如 `..\..\..\01_materials\properties\...`），确保在 VS Code 中可以 Ctrl+点击直接跳转到对应的 `info.md` 和图片文件。
+### 5. 输出规范 (Pre-published Markdown)
+`{property_name}_{persona}.md` 只包含标题、正文、标签三部分（`convert_to_markdown()` 直出），
+不附加任何素材链接或调试信息——保持发布稿干净，可直接复制进小红书。
 
 ---
 

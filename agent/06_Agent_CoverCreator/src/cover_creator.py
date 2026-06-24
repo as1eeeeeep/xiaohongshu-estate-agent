@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageStat
 
 
 ROOT = Path(__file__).resolve().parents[1]
+OUTPUTS_DIR = ROOT.parent.parent / "04_outputs"  # 松鼠找房/04_outputs，与 Agent3 的笔记输出共享
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 
@@ -122,8 +123,9 @@ def save_gemini_image(response, output_path):
             return
         if hasattr(part, "as_image"):
             image = part.as_image()
-            image.save(output_path)
-            return
+            if image is not None:
+                image.save(output_path)
+                return
     raise ValueError("Gemini did not return an image.")
 
 
@@ -664,6 +666,23 @@ def run(args):
     print(f"No-text image: {no_text_path}")
     print(f"Final cover: {final_cover_path}")
 
+    if args.run_id:
+        if qa and qa.get("pass") is not True:
+            print(
+                "Skipped copying into pre-published/: automated QA did not pass "
+                "(see needs_manual_review.json before publishing this cover manually).",
+                file=sys.stderr,
+            )
+        else:
+            property_name = Path(args.input_dir).name
+            publish_dir = OUTPUTS_DIR / args.run_id / "pre-published"
+            publish_dir.mkdir(parents=True, exist_ok=True)
+            published_cover = publish_dir / f"{property_name}_cover.png"
+            published_clean = publish_dir / f"{property_name}_cover_clean.png"
+            shutil.copy2(final_cover_path, published_cover)
+            shutil.copy2(no_text_path, published_clean)
+            print(f"Cover copied alongside Agent3 note: {published_cover}")
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Create Xiaohongshu real-estate covers from listing photos.")
@@ -687,6 +706,15 @@ def parse_args():
              "never overrides the red-line rules in prompts/renovate.md.",
     )
     parser.add_argument("--debug-json", action="store_true", help="Write internal selection and QA JSON files.")
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Pipeline run id (YYYYMMDD_HHMM) shared with Agent3. When set, the final cover "
+             "(and its clean no-text version) is also copied into "
+             "04_outputs/<run-id>/pre-published/<property_name>_cover[.{_clean}].png, "
+             "next to the Agent3 note for that same property, so an operator finds the "
+             "note and its cover in one folder instead of two.",
+    )
     return parser.parse_args()
 
 

@@ -103,6 +103,23 @@ cd "/Users/asleep/松鼠找房/agent"
 
 默认不输出 JSON 调试文件。需要查看选图和质检 JSON 时加 `--debug-json`。
 
+## 与 Agent3 笔记放在一起（`--run-id`）
+
+加 `--run-id <YYYYMMDD_HHMM>`（与跑 Agent3 时用的同一个 run_id），红线质检**通过**后会
+把最终封面额外复制一份到 Agent3 笔记所在的同一个文件夹：
+
+```text
+04_outputs/<run-id>/pre-published/
+  <property_name>_<persona>.md         # Agent3 笔记
+  <property_name>_cover.png            # 本次复制的最终封面
+  <property_name>_cover_clean.png      # 对应的纯装修无字图
+```
+
+`<property_name>` 取自 `input_dir` 的文件夹名，必须与该房源在 `01_materials/properties/`
+下的文件夹名一致，才能和 Agent3 笔记文件名前缀对上。质检没通过（"needs_manual_review"）
+时不会复制，避免把不合格的图放进发布目录——这种情况下封面只留在
+`06_Agent_CoverCreator/output/<property_name>/`，需要人工检查后再决定是否手动复制。
+
 ## 关键约束
 
 - 纯装修图严禁文字、数字、水印。
