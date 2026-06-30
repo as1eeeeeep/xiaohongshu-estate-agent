@@ -5,126 +5,119 @@
 
 与 Agent 3 的区别：
 - Agent 3 服务于**房源营销**（中介视角/素人种草特定楼盘），需要房源数据 (`property_data`) 并生成加字封面图
-- Agent 4 服务于**人设养号**（真实生活记录），**不需要房源数据**，**暂不生成封面图/配图**（只产出 `image_suggestions` 文字建议供后续人工拍摄/配图）
-
-Agent 4 的"老师"是 Agent 2 ——Agent 2 拆解了 10 条已验证的真实爆款素人图文笔记（来自 `01_materials/viral_examples/` 的内容复核结果），产出结构化 JSON 作为 Agent 4 的参考范文库。
-
----
-
-## 四类内容母题（必须先选一类再写）
-
-| 母题 key | 说明 | 训练素材示例 |
-|---|---|---|
-| `买房经历` | 记录自己买/正在买一套房的过程：为什么买、看了多久、纠结什么、最后选了哪、签约/收楼感受 | 港漂如何在香港的首次买房、港硕结课前在hk买了个房 |
-| `租房体验` | 点评/分享自己现在租的房子：租金、面积、布局、性价比、推荐还是劝退 | 我在香港10000一个月的小房子、港硕在这住一年你愿意住吗、hk学生公寓港硕租房 |
-| `看房日记` | 分享最近看房的经历：看了几套、某套的细节（朝向/楼层/中介的话）、最后选择或错过的原因 | 低成本港硕看房日记、香港看房之拿不下利奥坊 |
-| `生活分享` | 不强调买/租决策，纯粹分享当下居住状态：空间布置、生活方式转变、小区生活 | 在香港这样的家你几点回家、在香港升了VP换了小房子、OMG这让我读港大都想退学 |
-
-不传 `--category` 时，每篇生成会随机选择一个母题。
+- Agent 4 服务于**人设养号**（真实生活记录），**不需要房源数据**，**不生成封面图/配图**
 
 ---
 
 ## 核心配置
 
-- **Model**: `gemini-2.5-pro`（`HEAVY_MODEL`），失败降级到 `gemini-3.1-flash-lite`
-- **Temperature**: 0.8（需要真人语气的多样性，不是 Agent 2 的 0.3 稳定性）
+- **Model**: `HEAVY_MODEL`（当前 `gemini-3.1-pro-preview`，定义在 `shared/config.py`）
+- **Temperature**: 0.8
 - **Max Tokens**: 4096
 - **重试**: 3 次，最终降级模型重试 1 次
 - **Timeout**: 90s
 
 ---
 
-## System Prompt 设计哲学 (`system_prompt.txt`)
-
-### 身份
-运营"素人账号"的普通人，不是中介/KOL/房产博主。打开小红书纯粹记录居住相关经历。
-
-### Voice & Tone（核心灵魂）
-- 第一人称"我"，像朋友圈随手记，不是写文章
-- 真实情绪：纠结/庆幸/吐槽/自嘲/惊喜
-- 口语化、不完整句子，允许"说实话""讲真""有点""还行吧"
-- 可以吐槽缺点但不是抱怨大会，要有"日子还得过"的松弛感
-- **绝对禁止推销感**："联系我看盘""欢迎咨询"类中介话术
-- 配图必须是"真实生活实拍"：卧室一角、窗外的景、楼下小区——不是宣传海报/信息图
-
-### Writing Rules（与 Agent 3 共享同一套硬约束）
-- **禁用词**（与 `writer.py` 的 `_COMMON_RULES` 一致）：家人们、谁懂啊、绝绝子、宝子们、神仙、笋盘、宝藏楼盘、绝了、冲它、太香了、手慢无、YYDS、天花板、闭眼入、真香、宝藏、必入、姐妹们、谁懂、宝藏小区、梦中情房
-- **Emoji**: 整篇最多 3-4 个，禁用 🔥💥😩🏃‍♂️💨，可用 🏠📍💰🇭🇰
-- **排版**: 短段落（每段1-2句）、段间空行、可用小标题如"说一下租金"但不要"亮点1/亮点2"式编号
-- **港式用词**: 呎、校网、平地电梯、走一层楼梯、唐楼、上车
-
-### 标题
-12-25字，大白话，疑问/感叹/数字钩子。
-
-### 正文结构
-- 第1句直接进场景/结论，不要"大家好我是XX"
-- 中间3-5段自然带出细节（价格/面积/位置/装修/感受）
-- 结尾自然互动提问（不是"私信我"）
-- 正文 ≤ 400 字
-
-### Output Format
-严格 JSON，字段：`hook_title` / `main_content` / `interactive_question` / `seo_tags` / `image_suggestions` / `persona_note`
-- `main_content` 换行用 `\n`
-- `persona_note`：一句话说明本篇采用的素人子人设（如"港硕租房党，刚搬进学生公寓"）
-- `image_suggestions`：3-6条，每条是"真实生活实拍"该拍什么（非信息图/海报）
-- 只输出一个最终版本
-
----
-
-## 参考范文库（Agent 2 教学产出）
-
-- **来源**: Agent 2 对 `04_outputs/agent4_training_notes/`（10条已审核合格的真实素人爆款笔记）的拆解结果
-- **位置**: `04_outputs/agent4_training/analyzed/*.json`（9条有效，1条因图片格式问题拆解失败为 `null`，已被 `load_reference_notes()` 自动跳过）
-- **使用方式**: `build_user_prompt()` 每次随机抽取 3 条参考范文，提取其 `text_analysis.persona_perspective` / `hook_type` / `target_audience`、`visual_analysis.cover_style`、`text_analysis.conversion_strategy`、`reusable_template`（截断400字），拼入 user prompt 供模型学习结构和钩子手法（不要照抄措辞）
-
-如需重新生成参考范文库（例如补充新的爆款笔记）：
-```bash
-# 1. 把新笔记目录拷贝到 04_outputs/agent4_training_notes/
-# 2. 重新运行 Agent 2 拆解
-python -m 02_Agent_Analyzer.analyzer --input-dir ../04_outputs/agent4_training_notes --output-dir ../04_outputs --run-id agent4_training
-```
-
----
-
 ## CLI 使用
 
 ```bash
-# 在 agent/ 目录下运行，需设置编码环境变量（Windows）
-$env:PYTHONIOENCODING="utf-8"; $env:PYTHONLEGACYWINDOWSSTDIO="utf-8"
+# 列出所有房源写作角度
+python -m 04_Agent_AmateurViral.writer4 --list-angles
 
-# 列出所有母题
-python -m 04_Agent_AmateurViral.writer4 --list-categories
+# 房源多角度模式：--property-dir 和 --angle 必须同时传
+# ⚠️ 缺少 --angle 时脚本报错并列出全部角度，强制选择后才能继续
+python -m 04_Agent_AmateurViral.writer4 \
+  --property-dir "/path/to/property/folder" \
+  --angle 单价你会买吗 \
+  --run-id 20260629_1400 \
+  --output-dir "/path/to/output"
 
-# 指定母题生成 1 篇
+# 非房源模式（素人养号）
 python -m 04_Agent_AmateurViral.writer4 --category 租房体验 -n 1
-
-# 随机母题，生成 3 篇
-python -m 04_Agent_AmateurViral.writer4 -n 3 --run-id 20260612_1600
 ```
 
 ### 参数
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `--category` | str | None（随机） | `买房经历` / `租房体验` / `看房日记` / `生活分享` |
-| `-n, --num` | int | 1 | 生成篇数 |
+| `--property-dir` | Path | - | 房源目录（启用房源多角度模式，必须同时传 `--angle`） |
+| `--angle` | str | - | **房源模式必填**；缺省则报错列出全部角度 |
+| `--output-dir` | Path | `04_outputs/` | 自定义输出目录 |
 | `--run-id` | str | 自动生成 `YYYYmmdd_HHMM` | 管线运行时间戳 |
+| `--category` | str | None（随机） | 非房源模式母题：`买房经历` / `租房体验` / `看房日记` / `生活分享` |
+| `-n, --num` | int | 1 | 生成篇数（非房源模式） |
+| `--list-angles` | flag | - | 列出全部写作角度后退出 |
 | `--list-categories` | flag | - | 列出母题后退出 |
 
-### Python 调用
-```python
-from importlib import import_module
-writer4 = import_module("04_Agent_AmateurViral.writer4")
+---
 
-results = writer4.run(category="买房经历", n=1, run_id="20260612_1600")
-```
+## 写作角度体系（房源多角度模式）
+
+角度分**三大类**，`--angle` 传入 Key 列的值。
+
+### 大类一 · 忍痛放弃类
+
+| Key | 角度 | 核心钩子 |
+|---|---|---|
+| `放弃叙事` | A1：忍痛放弃叙事版 | 看上了但没下手，带遗憾情绪 |
+| `意外种草` | A2：意外种草版 | 低期待→惊喜反转，差点错过 |
+
+### 大类二 · 长什么样类
+
+| Key | 角度 | 核心钩子 |
+|---|---|---|
+| `优缺点总结` | B1：优缺点直白总结版 | 先抑后扬，理性测评 |
+| `看房日记` | B2：看楼日记+互动提问版 | 日记式记录当天看房，结尾必须提问 |
+| `看房踩坑` | B3：区域踩坑横扫版 | 吐槽区域通病，引出这套唯一及格 |
+| `长啥样开箱` | B4：地名+价格开箱（短文案）版 | 标题「地名+总价+长啥样」，60-120字短开箱，呎数换算平方米 |
+| `单价你会买吗` | B5：单价换算·你会买吗版 | 算每呎价并换算每平方米，结尾抛「你会买吗」 |
+
+### 大类三 · 询问类
+
+| Key | 角度 | 核心钩子 |
+|---|---|---|
+| `预算现实吗` | C1：预算够不够·现实吗版 | 摆出预算+区域+户型，客观问「现实吗」，邀上车/放弃两派现身 |
+| `纠结对比` | C2：纠结对比/求建议版 | 两个选项选不定，真心求建议 |
+| `决赛圈对比` | C3：多盘决赛圈横向对比版 | 多套候选只谈优点，纠结求建议 |
+| `住得下吗` | C4：家庭住得下求助版 | 几口之家住得下？1房→三口，2房→四口，3房→三代 |
+| `召唤过来人` | C5：召唤过来人现身说法版 | 召唤住过/买过的人爆料后悔点，开放式提问 |
+
+> **字数**：长啥样开箱 60-120字；单价你会买吗 / 预算现实吗 120-200字；召唤过来人 150-250字；其余 180-320字。
+> **已下架角度**（2026-06-30 重塑删除）：租客离别(原A3)、亮点加预算(原B4)、后悔三连(原D1老公乱签/D2买完后悔/D3执着踩坑)。
 
 ---
 
 ## 输出规范
 
-- **草稿**: `04_outputs/{run_id}/drafts/draft_agent4_{category}_{timestamp}.json`（含完整 `NoteContent` + `_category`）
-- **发布稿**: `04_outputs/{run_id}/pre-published/amateur_{category}_{title}_{timestamp}.md`
-  - 包含标题、人设说明、正文、互动提问、SEO标签、配图建议（无封面图）
+### .md 文件格式（pre-published）
+
+```
+# 标题
+
+正文（含互动提问，若结尾是感叹/自嘲则无提问）
+
+#tag1 #tag2 #tag3
+
+---
+X1：角度名称
+```
+
+### 目录结构
+
+```
+{output_dir}/{run_id}/
+├── pre-published/
+│   ├── A_情绪叙事/        ← A1 A2 A3
+│   ├── B_纠结求助/        ← B1 B2 B3 B4
+│   ├── C_记录测评/        ← C1 C2 C3
+│   └── D_后悔/            ← D1 D2 D3
+├── notes/
+│   └── {标题}/
+│       ├── note.txt       ← 纯文本正文（供发布用）
+│       └── *.jpg          ← 房源实拍图（自动复制）
+└── drafts/
+    └── *.json             ← 完整 LLM 输出
+```
 
 ---
 
@@ -134,22 +127,6 @@ results = writer4.run(category="买房经历", n=1, run_id="20260612_1600")
 |---|---|
 | 核心生成脚本 | `agent/04_Agent_AmateurViral/writer4.py` |
 | System Prompt | `agent/04_Agent_AmateurViral/system_prompt.txt` |
-| 参考范文库（Agent2拆解产出） | `04_outputs/agent4_training/analyzed/*.json` |
-| 训练素材原始笔记 | `04_outputs/agent4_training_notes/` |
-| 输出草稿/发布稿 | `04_outputs/{run_id}/drafts/`, `04_outputs/{run_id}/pre-published/` |
-
----
-
-## 与上下游的协作
-
-```
-Agent 1 (Hunter) → 爬取并筛选真实素人爆款笔记 → 01_materials/viral_examples/
-       ↓
-人工内容复核 → 挑选高质量素人视角笔记 → 04_outputs/agent4_training_notes/
-       ↓
-Agent 2 (Analyzer) → 拆解教学素材 → 04_outputs/agent4_training/analyzed/*.json
-       ↓
-Agent 4 (AmateurViral) → 学习拆解结果 + 母题模板 → 生成新的素人养号笔记
-```
-
-Agent 4 与 Agent 3 相互独立，共享 `shared/config.py` 的模型配置和 `_COMMON_RULES` 风格的写作约束，但服务于不同目的（养号 vs 房源营销）。
+| 角度分类映射 | `writer4.py` → `PROPERTY_ANGLES` / `ANGLE_CATEGORY_FOLDER` |
+| 参考范文库 | `04_outputs/agent4_training/analyzed/*.json` |
+| 输出目录 | `{output_dir}/{run_id}/pre-published/{大类}/` |

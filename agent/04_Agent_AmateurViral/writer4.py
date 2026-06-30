@@ -68,11 +68,39 @@ class NoteContent(BaseModel):
 # ═══════════════════════════════════════════════════════════════
 
 PROPERTY_ANGLES: dict[str, str] = {
-    "放弃叙事": "角度A：忍痛放弃叙事版",
-    "优缺点总结": "角度B：优缺点直白总结版",
-    "看房日记": "角度C：看楼日记+互动提问版",
-    "纠结对比": "角度D：纠结对比/求建议版",
-    "意外种草": "角度E：意外种草版",
+    # 大类1 忍痛放弃类
+    "放弃叙事":    "A1：忍痛放弃叙事版",
+    "意外种草":    "A2：意外种草版",
+    # 大类2 长什么样类
+    "优缺点总结":  "B1：优缺点直白总结版",
+    "看房日记":    "B2：看楼日记+互动提问版",
+    "看房踩坑":    "B3：区域踩坑横扫版",
+    "长啥样开箱":  "B4：地名+价格开箱（短文案）版",
+    "单价你会买吗": "B5：单价换算·你会买吗版",
+    # 大类3 询问类
+    "预算现实吗":  "C1：预算够不够·现实吗版",
+    "纠结对比":    "C2：纠结对比/求建议版",
+    "决赛圈对比":  "C3：多盘决赛圈横向对比版",
+    "住得下吗":    "C4：家庭住得下求助版",
+    "召唤过来人":  "C5：召唤过来人现身说法版",
+}
+
+ANGLE_CATEGORY_FOLDER: dict[str, str] = {
+    # 大类1 忍痛放弃类
+    "放弃叙事":    "1_忍痛放弃",
+    "意外种草":    "1_忍痛放弃",
+    # 大类2 长什么样类
+    "优缺点总结":  "2_长什么样",
+    "看房日记":    "2_长什么样",
+    "看房踩坑":    "2_长什么样",
+    "长啥样开箱":  "2_长什么样",
+    "单价你会买吗": "2_长什么样",
+    # 大类3 询问类
+    "预算现实吗":  "3_询问",
+    "纠结对比":    "3_询问",
+    "决赛圈对比":  "3_询问",
+    "住得下吗":    "3_询问",
+    "召唤过来人":  "3_询问",
 }
 
 
@@ -301,12 +329,20 @@ def build_property_angle_prompt(prop: dict, angle_key: str, reference_notes: lis
                 f"可复用模板: {note.get('reusable_template', '')[:300]}"
             )
 
-    parts.append("""
+    # 不同角度的字数规则
+    if angle_key == "长啥样开箱":
+        word_rule = "素人口吻，60-120字短开箱，就几句话，绝对不要写长"
+    elif angle_key in ("单价你会买吗", "预算现实吗"):
+        word_rule = "素人口吻，120-200字，聚焦一个点讲清楚不啰嗦"
+    else:
+        word_rule = "素人口吻，180-320字，像朋友圈不像文章"
+
+    parts.append(f"""
 【任务】
 基于以上房源信息和指定角度，写一篇全新的小红书图文笔记。
 
 【写作铁律】
-- 素人口吻，180-320字，像朋友圈不像文章
+- {word_rule}
 - 标题12-20字（绝对不超过20字），带具体数字/反差，有搜索流量
 - 如果提带看的人，统一用「小姐姐」，不需要 @任何账号
 - 小姐姐只能作为背景一笔带过（至多1-2句），不能成为叙事核心
@@ -316,6 +352,7 @@ def build_property_angle_prompt(prop: dict, angle_key: str, reference_notes: lis
 - 禁止用「耐心」「靠谱」「专业」「实在」「良心」等空泛形容词夸小姐姐
 - 禁止「#靠谱中介」「#诚实中介」「#中介推荐」「#靠谱小姐姐」等标签
 - 严禁出现「打PM」「私信我」「发资料」「发这套房子的资料」等任何推销话术或变体
+- 严禁出现 system prompt 禁用词清单里的浮夸词（家人们/姐妹们/谁懂/绝绝子/绝了/YYDS/天花板/闭眼入/真香/宝藏 等）
 - 笔记必须是纯素人分享，结尾只能是自然互动提问
 直接输出 JSON。""")
 
@@ -686,29 +723,19 @@ def _parse_response(raw: str) -> NoteContent:
 
 def convert_to_markdown(content: NoteContent, category: str) -> str:
     tags = " ".join(f"#{t}" for t in content.seo_tags) if content.seo_tags else ""
+    angle_label = PROPERTY_ANGLES.get(category, category)
 
-    lines = [
-        f"# {content.hook_title}",
-        "",
-        f"> 母题: {category} | 人设: {content.persona_note}",
-        "",
-        content.main_content.replace("\\n", "\n"),
-        "",
-        content.interactive_question,
-        "",
-    ]
+    body = content.main_content.replace("\\n", "\n").strip()
+    iq = content.interactive_question.strip()
+    if iq and iq not in body:
+        body = f"{body}\n\n{iq}"
+
+    lines = [f"# {content.hook_title}", "", body, ""]
     if tags:
-        lines.append(tags)
-        lines.append("")
-    if content.image_suggestions:
-        lines.append("---")
-        lines.append("")
-        lines.append("📷 **配图建议**（真实生活实拍，非生成图）:")
-        for i, s in enumerate(content.image_suggestions, 1):
-            lines.append(f"{i}. {s}")
-        lines.append("")
+        lines += [tags, ""]
+    lines += ["---", angle_label]
 
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 
 def save_draft(content: NoteContent, category: str, run_id: Optional[str] = None,
@@ -734,14 +761,12 @@ def save_pre_published(content: NoteContent, category: str, run_id: Optional[str
                         output_dir: Optional[Path] = None, file_prefix: Optional[str] = None) -> Path:
     base = Path(output_dir) if output_dir else OUTPUTS_DIR
     run_id = run_id or get_run_id()
-    target_dir = base / run_id / "pre-published"
+    subfolder = ANGLE_CATEGORY_FOLDER.get(category, "")
+    target_dir = base / run_id / "pre-published" / subfolder if subfolder else base / run_id / "pre-published"
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    hk_tz = timezone(timedelta(hours=8))
-    ts = datetime.now(hk_tz).strftime("%Y%m%d_%H%M%S")
-    safe_title = sanitize_filename(content.hook_title) or ts
-    prefix = file_prefix or f"amateur_{category}"
-    output_path = target_dir / f"{prefix}_{safe_title}_{ts}.md"
+    safe_title = sanitize_filename(content.hook_title) or get_run_id()
+    output_path = target_dir / f"{safe_title}.md"
 
     output_path.write_text(convert_to_markdown(content, category), encoding="utf-8")
     logger.info("Markdown 已发布: %s", output_path)
@@ -781,8 +806,9 @@ def save_assembled(
     tags = " ".join(f"#{t}" for t in content.seo_tags) if content.seo_tags else ""
     body = content.main_content.replace("\\n", "\n")
     note_text = f"{content.hook_title}\n\n{body}\n"
-    if content.interactive_question:
-        note_text += f"\n{content.interactive_question}\n"
+    iq = content.interactive_question.strip()
+    if iq and iq not in body:
+        note_text += f"\n{iq}\n"
     if tags:
         note_text += f"\n{tags}\n"
     txt_path = folder / "note.txt"
@@ -903,15 +929,51 @@ def _parse_args() -> argparse.Namespace:
                          help="母题：买房经历 / 租房体验 / 看房日记 / 生活分享（默认随机）")
     parser.add_argument("-n", "--num", type=int, default=1, help="生成篇数")
     parser.add_argument("--run-id", type=str, default=None, help="管线运行时间戳")
+    parser.add_argument("--output-dir", type=Path, default=None, help="输出目录（默认 04_outputs/）")
     parser.add_argument("--list-categories", action="store_true", help="列出所有母题后退出")
+    parser.add_argument("--property-dir", type=Path, default=None,
+                         help="房源目录（启用房源多角度模式，必须同时传 --angle）")
+    parser.add_argument("--angle", type=str, default=None,
+                         choices=list(PROPERTY_ANGLES.keys()),
+                         help="写作角度（--property-dir 模式下必填）：" +
+                              " / ".join(f"{k}={v}" for k, v in PROPERTY_ANGLES.items()))
+    parser.add_argument("--list-angles", action="store_true", help="列出所有房源多角度写作角度后退出")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
+
     if args.list_categories:
         for k, v in CATEGORIES.items():
             print(f"{k}: {v['label']}")
         sys.exit(0)
 
-    run(category=args.category, n=args.num, run_id=args.run_id)
+    if args.list_angles:
+        for k, v in PROPERTY_ANGLES.items():
+            print(f"{k}: {v}")
+        sys.exit(0)
+
+    if args.property_dir is not None:
+        if args.angle is None:
+            print("错误：使用 --property-dir 时必须同时指定 --angle。\n")
+            print("可选角度：")
+            for k, v in PROPERTY_ANGLES.items():
+                print(f"  {k}  {v}")
+            print("\n示例：--property-dir <路径> --angle 看房日记")
+            sys.exit(1)
+        prop_dir = args.property_dir.resolve()
+        info_path = prop_dir / "info.md"
+        if not info_path.exists():
+            print(f"错误：找不到 {info_path}")
+            sys.exit(1)
+        # 把 info.md 全文塞进 raw_info，让 build_property_angle_prompt 直接用
+        prop_data = {
+            "name": prop_dir.name,
+            "property_dir": str(prop_dir),
+            "raw_info": info_path.read_text(encoding="utf-8"),
+        }
+        run(property_data=prop_data, angle_key=args.angle,
+            run_id=args.run_id, output_dir=args.output_dir)
+    else:
+        run(category=args.category, n=args.num, run_id=args.run_id, output_dir=args.output_dir)
