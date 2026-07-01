@@ -4,8 +4,8 @@ import re
 import sys
 from pathlib import Path
 
-# Paths
-BASE_DIR = Path(r"d:\xiaohongshu_estate")
+# Paths — resolve relative to this script's location so it works on any OS
+BASE_DIR = Path(__file__).resolve().parent.parent
 INBOX_DIR = BASE_DIR / "01_materials" / "_inbox"
 PROPERTIES_DIR = BASE_DIR / "01_materials" / "properties"
 

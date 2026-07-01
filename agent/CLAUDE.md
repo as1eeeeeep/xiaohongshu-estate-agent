@@ -2,11 +2,11 @@
 
 ## 强制规则：必须通过脚本执行，禁止手写模仿
 
-任何"用 Agent3 风格写小红书文案""按 amateur/agent/lean persona 生成房产笔记"
+任何"用 Agent3 风格写小红书文案""按 agent/lean persona 生成房产笔记"
 之类的批量生成任务，必须通过 subprocess 执行真实脚本：
 
 ```
-python 03_Agent_Generator/writer.py --persona <amateur|agent|lean> --count N [--run-id ...]
+python 03_Agent_Generator/writer.py --persona <agent|lean> --count N [--run-id ...]
 ```
 
 **禁止自己手写文案来模仿 Agent3 的 persona 风格。** 手写内容不是 Agent3 的真实输出——
@@ -32,7 +32,7 @@ python 03_Agent_Generator/writer.py --persona <amateur|agent|lean> --count N [--
 ## 脚本位置与用法
 
 - 主脚本: `03_Agent_Generator/writer.py`
-- 三个 persona: `amateur`（素人）/ `agent`（中介）/ `lean`（极简中介）
+- 两个 persona: `agent`（中介）/ `lean`（极简中介）
 - 默认从 `01_materials/properties/` 随机选房源；可用 `--property-dir` 指定
 - 输出: `04_outputs/{run_id}/drafts/`（JSON 草稿）+ `04_outputs/{run_id}/pre-published/`（发布稿 .md）
 - 详细设计文档: `.claude/skills/agent3-writer.md`

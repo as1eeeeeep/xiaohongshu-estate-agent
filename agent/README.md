@@ -68,7 +68,7 @@ python -m 03_Agent_Generator.writer --persona agent --run-id {run_id}
 from 03_Agent_Generator import writer
 writer.run(
     property_data=prop,     # 房源数据 dict
-    persona="agent",        # amateur (素人) 或 agent (中介)
+    persona="agent",        # agent (中介) 或 lean (极简中介)
     run_id=run_id,          # 运行时间戳 YYYYMMDD_HHMM
     output_dir=OUTPUTS_DIR,
     skip_strategy=False,
