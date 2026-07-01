@@ -208,6 +208,16 @@ def search_notes(keyword: str, page: int = 1, sort: str = SEARCH_SORT,
                     except ValueError:
                         pass
                     break
+        interact = note_card.get("interact_info", {})
+        try:
+            liked_count = int(interact.get("liked_count", "0"))
+        except ValueError:
+            liked_count = 0
+        try:
+            comment_count = int(interact.get("comment_count", "0"))
+        except ValueError:
+            comment_count = 0
+
         notes.append({
             "id": note_id,
             "xsec_token": xsec,
@@ -217,6 +227,8 @@ def search_notes(keyword: str, page: int = 1, sort: str = SEARCH_SORT,
             "user_nickname": user_info.get("nickname", user_info.get("nick_name", "")),
             "desc": note_card.get("desc", ""),
             "publish_ts": publish_ts,
+            "liked_count": liked_count,
+            "comment_count": comment_count,
         })
     logger.info("搜索结果: %d 条笔记 (keyword=\"%s\" page=%d)", len(notes), keyword, page)
     return notes
@@ -797,8 +809,11 @@ def download_note_content(note_id: str, xsec_token: str = "",
     try:
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="xhs_read_")
         os.close(tmp_fd)
+        read_args = [XHS_CLI_CMD, "read", note_id, "--json"]
+        if xsec_token:
+            read_args += ["--xsec-token", xsec_token]
         proc = subprocess.run(
-            [XHS_CLI_CMD, "read", note_id, "--json"],
+            read_args,
             stdout=open(tmp_path, "w", encoding="utf-8"),
             stderr=subprocess.PIPE,
             timeout=DOWNLOAD_NOTE_TIMEOUT,
