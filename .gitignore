@@ -33,3 +33,13 @@ Thumbs.db
 # ChromaDB
 chroma_db/
 *.chromadb/
+
+# 爬取/生成数据产物 & 大体积素材（体积大，不入库）
+/02_scrap_output/
+/scrap_output/
+/cover creator/
+/06_Agent_CoverCreator
+agent/data_pipeline/stage1_raw/
+
+# 向量库知识库（每次运行都变的二进制，不入库）
+agent/02_Agent_Analyzer/knowledge_base/
