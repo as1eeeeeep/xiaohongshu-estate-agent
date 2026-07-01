@@ -43,3 +43,7 @@ agent/data_pipeline/stage1_raw/
 
 # 向量库知识库（每次运行都变的二进制，不入库）
 agent/02_Agent_Analyzer/knowledge_base/
+
+# 临时/实验脚本目录 & 运行日志（不入库）
+agent/scratch/
+agent/01_Agent_Scraper/run_log_traffic.txt
