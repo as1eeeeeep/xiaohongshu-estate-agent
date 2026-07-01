@@ -742,7 +742,7 @@ def run(args):
         else:
             property_name = Path(args.input_dir).name
             base_name = f"{property_name}_{args.note_suffix}" if args.note_suffix else property_name
-            publish_dir = OUTPUTS_DIR / args.run_id / "pre-published"
+            publish_dir = OUTPUTS_DIR / args.run_id / "pre-published" / base_name
             publish_dir.mkdir(parents=True, exist_ok=True)
             published_original = publish_dir / f"{base_name}_original{selected_copy.suffix.lower()}"
             published_clean = publish_dir / f"{base_name}_cover_clean.png"

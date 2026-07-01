@@ -41,7 +41,7 @@ mkdir -p input/listing-001
   --subtitle "真实房源｜自然采光｜温柔奶油风"
 ```
 
-默认最终封面使用已调好的 `editorial` 咖啡色杂志感排版。也可以指定 5 种调教过的自动配色风格：
+默认最终封面使用已调好的 `editorial` 咖啡色杂志感排版。也可以指定 4 种调教过的自动配色风格：
 
 ```bash
 --cover-style editorial  # 咖啡色杂志感，默认，标题和副标题已加大上下间距
@@ -53,7 +53,7 @@ mkdir -p input/listing-001
 也可以加 `--decor-style "大理石"` 之类的装修风格基调，会注入到 AI 装修生图的 prompt 里，
 在不违反红线规则的前提下通过材质和软装体现该风格（不指定则按房间类型默认软装方案）。
 
-需要一次输出 5 个候选版本时：
+需要一次输出 4 个候选版本时：
 
 ```bash
 06_Agent_CoverCreator/run.sh 06_Agent_CoverCreator/input/listing-001 \

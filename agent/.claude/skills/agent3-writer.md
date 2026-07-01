@@ -1,5 +1,24 @@
 # Agent 3 — 爆款图文生成器 (Writer)
 
+## ⚠️ 强制红线：必须调用脚本，禁止手写模仿
+
+**任何批量生成任务必须通过 subprocess 执行真实脚本，禁止自己手写文案来模仿 Agent3 的 persona 风格。**
+
+```bash
+python 03_Agent_Generator/writer.py --persona <agent|lean> --count N [--run-id ...]
+```
+
+手写内容绕过了 `writer.py` 内置的：
+- 固定 system prompt（每个 persona 的人设、Hook Strategy、禁用词列表）
+- 程序化输出校验 `_validate_note()`（标题长度 / 禁用词 / emoji数量 / CTA完整性 / lean 红线检查）
+- 固定的 `HEAVY_MODEL` 调用（`shared/config.py` 里配置的模型，不是当前对话用的模型）
+
+**例外**：用户明确要求"帮我手写/改写这一篇具体文案"（针对单篇已有内容的人工编辑，不是批量生成新内容）。
+
+这条规则对所有编程助手生效（Claude Code、Codex、其他 agent 均适用）。
+
+---
+
 ## 角色定位
 基于房源生料 + SOP 爆款方法论 + 参考范文，生成去 AI 味的小红书香港房产图文笔记。支持多视角写作（素人 / 中介 / 极简中介），强制输出结构化 JSON，同时生成可直接发布的 Markdown 文件。
 

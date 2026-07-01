@@ -3,7 +3,7 @@ Agent 3 — 爆款图文生成器 (Writer)
 基于房源生料 + SOP 方法论 + 参考范文，生成去 AI 味的小红书房产笔记。
 强制输出 JSON，保存到 04_outputs/drafts/，发布稿保存到 04_outputs/{run_id}/pre-published/。
 
-支持三种写作视角：amateur（素人）/ agent（中介）/ lean（极简中介）。
+支持两种写作视角：agent（中介）/ lean（极简中介）。
 写作前会先做一轮内部策略规划（人群定位/钩子/留白/CTA），但不单独输出策略文件——
 规划结果只用于指导正文创作，不落盘、不对外展示。
 """
@@ -161,24 +161,7 @@ persona_note：本篇锁定的目标人群（如"大陆投资型买家"）。
 main_content 中的换行用 \\n 表示。"""
 
 
-# ── Persona: 素人（普通打工人视角）───────────────────────────
-SYSTEM_PROMPT_AMATEUR = f"""# Identity
-你是一个在香港打工的普通人，最近刚买了一套房（或者正在看房）。你不是中介，不是 KOL，就是个普通上班族。
-你现在下班回家瘫在沙发上，打开小红书想记录一下自己的看房/买房经历。你写的东西像发朋友圈——真实、有情绪、不装。
 
-# Voice & Tone
-- 视角是"买家/业主"，不是"卖房的人"
-- 可以说你纠结过什么、踩过什么坑、最后为什么选了这套
-- 可以客观吐槽（走楼梯累、面积小、装修旧），但要真实，不能像在抱怨
-- 可以用"我"开头讲故事，用"你"来共情同样在看房的读者
-- 口语自然：可以用"说实话""讲真""其实""我觉得""有点"
-- 你写东西不是为了卖房，是为了记录和分享。所以语气松弛，没有推销感。
-- 允许不完整的句子，允许一句话就是一个段落
-
-# 标题特点
-多用情绪词和生活感：终于上车了、看房半年后的决定、值了、没想到能买到、这个预算我尽力了
-
-{_COMMON_RULES}"""
 
 # ── Persona: 中介（专业经纪人视角）───────────────────────────
 SYSTEM_PROMPT_AGENT = f"""# Identity
@@ -309,10 +292,6 @@ SYSTEM_PROMPT_LEAN_AGENT = f"""# Identity
 
 # Persona 配置表
 PERSONA_CONFIG = {
-    "amateur": {
-        "system_prompt": SYSTEM_PROMPT_AMATEUR,
-        "label": "素人视角 — 记录分享自己的看房/买房经历，围绕一套具体房源",
-    },
     "agent": {
         "system_prompt": SYSTEM_PROMPT_AGENT,
         "label": "中介视角 — 推广房源，信息密度高，引导评论留言获客",
@@ -331,7 +310,7 @@ def build_user_prompt(
     sop_text: str,
     reference_notes: list[dict],
     property_data: dict,
-    persona: str = "amateur",
+    persona: str = "agent",
     strategy_md: str = "",
 ) -> str:
     """将 SOP + 参考范文 + 房源生料 + 行文思路拼接为 user prompt。"""
@@ -366,7 +345,6 @@ def build_user_prompt(
         parts.append(f"\n【SOP 要点（理解核心策略即可，不要生搬硬套）】\n{sop_text[:2000]}")
 
     persona_hint = {
-        "amateur": "记住：你是一个刚买房/在看房的普通打工人，用手机记录分享，不是推销。",
         "agent": "记住：你是负责推广这套房源的地产中介，用手机打字，高效直接，不需要塑造额外人设。",
         "lean": "记住：简洁但真实自然的中介语气，200-280字左右，只说干货+表面小缺点，不写装修风格，不暴露楼龄/面积致命伤，CTA要完整可读。",
     }.get(persona, "记住：用手机打字写一篇真实的分享。")
@@ -676,7 +654,7 @@ def build_strategy_prompt(
     persona: str,
 ) -> str:
     """构建策略规划 prompt：让 LLM 先确定人群、模板、钩子/留白/CTA 再动笔。"""
-    persona_label = PERSONA_CONFIG.get(persona, PERSONA_CONFIG["amateur"])["label"]
+    persona_label = PERSONA_CONFIG.get(persona, PERSONA_CONFIG["agent"])["label"]
     parts: list[str] = []
 
     parts.append(f"【房源数据】\n{json.dumps(property_data, ensure_ascii=False, indent=2)}")
@@ -984,7 +962,7 @@ def _validate_note(content: NoteContent, persona: str) -> list[str]:
 # LLM 调用
 # ═══════════════════════════════════════════════════════════════
 
-def call_llm(user_prompt: str, persona: str = "amateur") -> NoteContent:
+def call_llm(user_prompt: str, persona: str = "agent") -> NoteContent:
     """调用 LLM 生成笔记，带重试、降级、程序化校验。
 
     校验失败会触发重试（视为可恢复失败，与 JSON 解析失败同等对待）；
@@ -992,10 +970,10 @@ def call_llm(user_prompt: str, persona: str = "amateur") -> NoteContent:
     返回最后一次结果（带瑕疵但不让整个管线崩溃），并在日志中显著标出。
     """
     if persona not in PERSONA_CONFIG:
-        logger.warning("未知 persona '%s'，回退使用 amateur 的 system prompt", persona)
+        logger.warning("未知 persona '%s'，回退使用 agent 的 system prompt", persona)
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
-    persona_cfg = PERSONA_CONFIG.get(persona, PERSONA_CONFIG["amateur"])
+    persona_cfg = PERSONA_CONFIG.get(persona, PERSONA_CONFIG["agent"])
     system_prompt = persona_cfg["system_prompt"]
 
     last_result: Optional[NoteContent] = None
@@ -1133,7 +1111,7 @@ def _parse_response(raw: str) -> NoteContent:
 # 结果保存
 # ═══════════════════════════════════════════════════════════════
 
-def save_draft(content: NoteContent, persona: str = "amateur", run_id: Optional[str] = None, output_dir: Optional[Path] = None) -> Path:
+def save_draft(content: NoteContent, persona: str = "agent", run_id: Optional[str] = None, output_dir: Optional[Path] = None) -> Path:
     """保存生成的笔记草稿 JSON，存入 {run_id}/drafts/ 下。"""
     base = Path(output_dir) if output_dir else OUTPUTS_DIR
     run_id = run_id or get_run_id()
@@ -1184,7 +1162,7 @@ def convert_to_markdown(content: NoteContent) -> str:
 def save_pre_published(
     content: NoteContent,
     property_name: str,
-    persona: str = "amateur",
+    persona: str = "agent",
     run_id: Optional[str] = None,
     output_dir: Optional[Path] = None,
 ) -> Path:
@@ -1212,19 +1190,18 @@ def run(
     property_data: Optional[dict] = None,
     sop_text: Optional[str] = None,
     reference_notes: Optional[list[dict]] = None,
-    persona: str = "amateur",
+    persona: str = "agent",
     run_id: Optional[str] = None,
     output_dir: Optional[Path] = None,
     skip_strategy: bool = False,
 ) -> NoteContent:
     """主入口（两阶段管线）：内部策略规划（不落盘） → 笔记创作 → 草稿 + MD 发布稿。
 
-    支持三种 Persona:
-      - "amateur": 素人视角，围绕具体房源记录分享
+    支持两种 Persona:
       - "agent": 中介视角，推广房源引导评论/私信
       - "lean": 极简中介视角，简洁客观配表面痛点
     """
-    persona_cfg = PERSONA_CONFIG.get(persona, PERSONA_CONFIG["amateur"])
+    persona_cfg = PERSONA_CONFIG.get(persona, PERSONA_CONFIG["agent"])
     run_id = run_id or get_run_id()
     logger.info("=" * 50)
     logger.info("  Agent 3 — 爆款图文生成器 启动")
@@ -1292,9 +1269,9 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Agent 3 — 小红书爆款图文生成器")
     parser.add_argument(
         "--persona",
-        choices=["amateur", "agent", "lean"],
-        default="amateur",
-        help="写作视角: amateur=素人记录分享, agent=中介推广获客, lean=极简中介(简洁客观)",
+        choices=["agent", "lean"],
+        default="agent",
+        help="写作视角: agent=中介推广获客, lean=极简中介(简洁客观)",
     )
     parser.add_argument(
         "--output-dir",
