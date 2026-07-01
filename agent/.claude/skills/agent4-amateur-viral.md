@@ -9,6 +9,20 @@
 
 ---
 
+## 发布版打包（固定能力，⚠️ 仅按需使用）
+
+`publish_export` 把一个 run 打包成「发布版」：不分大类文件夹，每篇一个**编号打头**的文件夹（如 `A2_<标题>/`），
+内含 `<标题>.md`（文案）+ `<标题>.png`（大字报封面）。编号 = 角度编号（A忍痛放弃 / B长什么样 / C询问）。
+
+**红线：默认不自动执行，只有用户明确说"导出/生成发布版"时才运行。** 生成笔记/配封面后不要顺手导出。
+
+```bash
+python -m 04_Agent_AmateurViral.publish_export --run-dir "<run目录>" [--out "<发布版目录>"] [--include-photos]
+```
+角度识别：note 文件夹 `_angle.txt`（新 run 自动写）→ drafts `_category` → 关键词兜底。详见 README「发布版打包」。
+
+---
+
 ## 核心配置
 
 - **Model**: `HEAVY_MODEL`（当前 `gemini-3.1-pro-preview`，定义在 `shared/config.py`）

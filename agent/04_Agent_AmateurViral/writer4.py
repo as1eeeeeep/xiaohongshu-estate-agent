@@ -852,6 +852,10 @@ def save_assembled(
     txt_path.write_text(note_text.strip() + "\n", encoding="utf-8")
     logger.info("Assembled TXT: %s", txt_path)
 
+    # ── 记录本篇角度（供发布版导出可靠识别编号，无需靠标题猜）──
+    if angle_key:
+        (folder / "_angle.txt").write_text(angle_key, encoding="utf-8")
+
     # ── 房源实拍图 ──
     if property_data:
         prop_dir = property_data.get("property_dir", "")
