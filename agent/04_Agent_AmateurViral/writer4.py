@@ -71,24 +71,28 @@ PROPERTY_ANGLES: dict[str, str] = {
     # 大类1 忍痛放弃类
     "放弃叙事":    "A1：忍痛放弃叙事版",
     "意外种草":    "A2：意外种草版",
+    "纠结对比":    "A3：纠结对比/求建议版",
+    "决赛圈对比":  "A4：多盘决赛圈横向对比版",
+    "住得下吗":    "A5：家庭住得下求助版",
+    "召唤过来人":  "A6：召唤过来人现身说法版",
     # 大类2 长什么样类
     "优缺点总结":  "B1：优缺点直白总结版",
     "看房日记":    "B2：看楼日记+互动提问版",
     "看房踩坑":    "B3：区域踩坑横扫版",
     "长啥样开箱":  "B4：地名+价格开箱（短文案）版",
     "单价你会买吗": "B5：单价换算·你会买吗版",
-    # 大类3 询问类
+    # 大类3 询问类（仅此一个角度）
     "预算现实吗":  "C1：预算够不够·现实吗版",
-    "纠结对比":    "C2：纠结对比/求建议版",
-    "决赛圈对比":  "C3：多盘决赛圈横向对比版",
-    "住得下吗":    "C4：家庭住得下求助版",
-    "召唤过来人":  "C5：召唤过来人现身说法版",
 }
 
 ANGLE_CATEGORY_FOLDER: dict[str, str] = {
     # 大类1 忍痛放弃类
     "放弃叙事":    "1_忍痛放弃",
     "意外种草":    "1_忍痛放弃",
+    "纠结对比":    "1_忍痛放弃",
+    "决赛圈对比":  "1_忍痛放弃",
+    "住得下吗":    "1_忍痛放弃",
+    "召唤过来人":  "1_忍痛放弃",
     # 大类2 长什么样类
     "优缺点总结":  "2_长什么样",
     "看房日记":    "2_长什么样",
@@ -97,10 +101,6 @@ ANGLE_CATEGORY_FOLDER: dict[str, str] = {
     "单价你会买吗": "2_长什么样",
     # 大类3 询问类
     "预算现实吗":  "3_询问",
-    "纠结对比":    "3_询问",
-    "决赛圈对比":  "3_询问",
-    "住得下吗":    "3_询问",
-    "召唤过来人":  "3_询问",
 }
 
 
@@ -330,9 +330,18 @@ def build_property_angle_prompt(prop: dict, angle_key: str, reference_notes: lis
             )
 
     # 不同角度的字数规则
+    angle_extra = ""
     if angle_key == "长啥样开箱":
         word_rule = "素人口吻，60-120字短开箱，就几句话，绝对不要写长"
-    elif angle_key in ("单价你会买吗", "预算现实吗"):
+    elif angle_key == "预算现实吗":
+        word_rule = "素人口吻，60-120字，短。全程是『我想买X房』的需求口吻，绝不能写成去看了某套房/某楼盘"
+        angle_extra = """
+【本篇额外强制（预算现实吗）——违反即不合格】
+- 上面的房源数据**只用来提取三样**：地点(区/片区)、房型(几房)、大致总价。其余精确参数（呎数/楼龄/楼层/到地铁几分钟/校网编号/装修状态）一律不要写进笔记。
+- 这不是看房笔记！绝对禁止"今天去看了/刚去看了/刚好看到一套/去XX盘看了"这类看房叙述，也不要出现任何具体楼盘名字、不要提带看小姐姐。
+- 通篇是"我想在<地点>、用<预算>、买<房型>"的需求口吻，可以再带一两个**笼统生活化**的偏好（如想要电梯、离地铁近一点、楼别太旧、采光好点），但偏好也要笼统，不准报精确数字。
+- 然后客观问大家这个预算+地点+房型现不现实，结尾邀请上车的/放弃换片区的来评论区说理由。短、自然、不刻意。"""
+    elif angle_key == "单价你会买吗":
         word_rule = "素人口吻，120-200字，聚焦一个点讲清楚不啰嗦"
     else:
         word_rule = "素人口吻，180-320字，像朋友圈不像文章"
@@ -340,7 +349,7 @@ def build_property_angle_prompt(prop: dict, angle_key: str, reference_notes: lis
     parts.append(f"""
 【任务】
 基于以上房源信息和指定角度，写一篇全新的小红书图文笔记。
-
+{angle_extra}
 【写作铁律】
 - {word_rule}
 - 标题12-20字（绝对不超过20字），带具体数字/反差，有搜索流量
@@ -721,13 +730,32 @@ def _parse_response(raw: str) -> NoteContent:
 # 结果保存
 # ═══════════════════════════════════════════════════════════════
 
+def _iq_in_body(iq: str, body: str) -> bool:
+    """判断互动提问是否已在正文里（忽略 emoji/标点/空白差异，避免重复拼接）。"""
+    norm = lambda s: re.sub(r'[^\w一-鿿]', '', s)
+    niq = norm(iq)
+    return bool(niq) and niq in norm(body)
+
+
+def _format_tags(seo_tags) -> str:
+    """规范成 '#t1 #t2 ...'：拆开被逗号/顿号/空格/# 粘在一起的标签，去重去空。"""
+    out, seen = [], set()
+    for raw in seo_tags or []:
+        for t in re.split(r'[,，、\s#]+', str(raw)):
+            t = t.strip()
+            if t and t not in seen:
+                seen.add(t)
+                out.append(t)
+    return " ".join(f"#{t}" for t in out)
+
+
 def convert_to_markdown(content: NoteContent, category: str) -> str:
-    tags = " ".join(f"#{t}" for t in content.seo_tags) if content.seo_tags else ""
+    tags = _format_tags(content.seo_tags)
     angle_label = PROPERTY_ANGLES.get(category, category)
 
     body = content.main_content.replace("\\n", "\n").strip()
     iq = content.interactive_question.strip()
-    if iq and iq not in body:
+    if iq and not _iq_in_body(iq, body) and not body.rstrip().endswith(("？", "?")):
         body = f"{body}\n\n{iq}"
 
     lines = [f"# {content.hook_title}", "", body, ""]
@@ -803,11 +831,11 @@ def save_assembled(
     folder.mkdir(parents=True, exist_ok=True)
 
     # ── note.txt（无字段标签，纯内容）──
-    tags = " ".join(f"#{t}" for t in content.seo_tags) if content.seo_tags else ""
+    tags = _format_tags(content.seo_tags)
     body = content.main_content.replace("\\n", "\n")
     note_text = f"{content.hook_title}\n\n{body}\n"
     iq = content.interactive_question.strip()
-    if iq and iq not in body:
+    if iq and not _iq_in_body(iq, body) and not body.rstrip().endswith(("？", "?")):
         note_text += f"\n{iq}\n"
     if tags:
         note_text += f"\n{tags}\n"

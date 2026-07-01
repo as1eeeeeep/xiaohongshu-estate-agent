@@ -133,6 +133,7 @@ def main():
     ap.add_argument("--notes-dir", required=True, help="notes 目录（含每篇一个子文件夹）")
     ap.add_argument("--headless", action="store_true")
     ap.add_argument("--seed", type=int, default=None, help="随机种子（可复现风格选择）")
+    ap.add_argument("--skip-existing", action="store_true", help="跳过已有 photo_1.png 的笔记（断点续跑）")
     args = ap.parse_args()
 
     if args.seed is not None:
@@ -158,6 +159,9 @@ def main():
         for i, folder in enumerate(folders, 1):
             title = (folder / "note.txt").read_text(encoding="utf-8").splitlines()[0].strip()
             out_path = folder / "photo_1.png"
+            if args.skip_existing and out_path.exists():
+                print(f"[{i}/{len(folders)}] {title[:28]}  · 跳过(已有封面)")
+                continue
             print(f"[{i}/{len(folders)}] {title[:28]}")
             try:
                 style = make_cover(page, title, out_path)
