@@ -681,6 +681,24 @@ def _finalize_title(content: NoteContent) -> NoteContent:
     return content
 
 
+def _age_or_repair_violation(content: NoteContent) -> str:
+    """检测正文是否出现【具体楼龄年数】或【维修话题】——两者都是硬禁。返回命中的片段，无则空串。"""
+    text = f"{content.hook_title}\n{content.main_content}".replace("\\n", "\n")
+    # 具体楼龄年数：如 "25年楼龄" / "楼龄47年" / "快50年" / "48年的老房" / "四五十年"
+    age_pat = re.compile(r"(楼龄\s*[0-9一二三四五六七八九十两]+\s*年|[0-9一二三四五六七八九十两]+\s*年\s*楼龄|"
+                         r"[0-9一二三四五六七八九十两]{1,3}\s*年的?(老)?(房|楼|大厦|唐楼)|"
+                         r"[0-9一二三四五六七八九十两]+\s*年\b(?=[^，。！？\n]{0,6}(楼|房|旧|老)))")
+    m = age_pat.search(text)
+    if m:
+        return f"具体楼龄年数「{m.group(0)}」"
+    # 维修话题
+    repair_pat = re.compile(r"(维修|大维修|维修基金|外墙维修|验楼|摊分|摊钱|维保|翻新摊|维修费|维修成本)")
+    m = repair_pat.search(text)
+    if m:
+        return f"维修话题「{m.group(0)}」"
+    return ""
+
+
 def call_llm(user_prompt: str, system_prompt: str) -> NoteContent:
     """调用 LLM 生成笔记，带重试（含标题超长重试）和降级策略。"""
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
@@ -712,6 +730,11 @@ def call_llm(user_prompt: str, system_prompt: str) -> NoteContent:
         n = len(result.hook_title.strip())
         if n > MAX_TITLE_LEN and attempt < MAX_RETRIES:
             logger.warning("标题超长(%d字>%d)，重试: %s", n, MAX_TITLE_LEN, result.hook_title.strip())
+            continue
+        # 内容校验：具体楼龄年数 / 维修话题（硬禁）触发重试
+        viol = _age_or_repair_violation(result)
+        if viol and attempt < MAX_RETRIES:
+            logger.warning("命中硬禁(%s)，重试", viol)
             continue
         return _finalize_title(result)
 
