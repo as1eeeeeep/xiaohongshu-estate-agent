@@ -153,15 +153,15 @@ def export(run_dir: Path, out_dir: Path, include_photos: bool = False) -> None:
         lines = [_fix_tags_line(ln) if ln.startswith("#") and re.search(r"[,，、]", ln) else ln for ln in lines]
         (dst / f"{base}.md").write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
 
-        # 封面 photo_1.*
+        # 封面 photo_1.* → 01_封面_<标题>
         covers = sorted(folder.glob("photo_1.*"))
         if covers:
-            shutil.copy2(covers[0], dst / f"{base}{covers[0].suffix}")
+            shutil.copy2(covers[0], dst / f"01_封面_{base}{covers[0].suffix}")
 
-        # 实拍图：A/B 类要配（指向具体房源）；C 询问类不配（需求口吻，不指向房源）
+        # 实拍图：A/B 类要配（指向具体房源），命名 0N_实拍_<源图原名>；C 询问类不配（需求口吻，不指向房源）
         if code[0] in ("A", "B"):
-            for j, ph in enumerate(_gather_photos(folder), 1):
-                shutil.copy2(ph, dst / f"{base}_{j}{ph.suffix}")
+            for j, ph in enumerate(_gather_photos(folder), start=2):
+                shutil.copy2(ph, dst / f"{j:02d}_实拍_{ph.name}")
         ok += 1
 
     print(f"✅ 发布版导出完成：{ok} 篇 → {out_dir}")
