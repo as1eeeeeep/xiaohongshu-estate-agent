@@ -47,6 +47,40 @@ _KW = [  # 关键词兜底（仅用于既无 _angle.txt 又无 drafts 的老 run
 ]
 
 
+MAX_PHOTOS = 4          # A/B 每篇最多配几张实拍图
+_IMG_EXT = (".jpg", ".jpeg", ".png")
+
+
+def _real_photos(d: Path) -> list:
+    """房源目录里的实拍图（排除大字报封面 photo_1 / *cover*）。"""
+    return sorted(
+        f for f in d.iterdir()
+        if f.suffix.lower() in _IMG_EXT
+        and "cover" not in f.name.lower()
+        and f.stem not in ("photo_1",)
+    )
+
+
+def _gather_photos(folder: Path) -> list:
+    """给一篇 A/B 笔记凑实拍图：优先从 _property.txt 记录的源房源图库取，
+    对比篇有多套则每套轮流取；不足再用 note 文件夹里已复制的 photo_2/3 兜底。"""
+    picked: list = []
+    prop_file = folder / "_property.txt"
+    if prop_file.exists():
+        src_dirs = [Path(l.strip()) for l in prop_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+        pools = [_real_photos(d) for d in src_dirs if d.is_dir()]
+        # 每套轮流取一张，直到取满 MAX_PHOTOS
+        idx = 0
+        while len(picked) < MAX_PHOTOS and any(idx < len(pool) for pool in pools):
+            for pool in pools:
+                if idx < len(pool) and len(picked) < MAX_PHOTOS:
+                    picked.append(pool[idx])
+            idx += 1
+    if not picked:  # 兜底：note 文件夹里已随机复制的 photo_2/3…
+        picked = [p for p in sorted(folder.glob("photo_*")) if p.stem != "photo_1"][:MAX_PHOTOS]
+    return picked[:MAX_PHOTOS]
+
+
 def _norm(s: str) -> str:
     return re.sub(r"[^\w一-鿿]", "", s)
 
@@ -123,12 +157,11 @@ def export(run_dir: Path, out_dir: Path, include_photos: bool = False) -> None:
         covers = sorted(folder.glob("photo_1.*"))
         if covers:
             shutil.copy2(covers[0], dst / f"{base}{covers[0].suffix}")
-        # 可选：房图 photo_2/3…
-        if include_photos:
-            for ph in sorted(folder.glob("photo_*")):
-                if not ph.stem.endswith("_1") and ph.stem != "photo_1":
-                    idx = re.sub(r"\D", "", ph.stem) or "x"
-                    shutil.copy2(ph, dst / f"{base}_{idx}{ph.suffix}")
+
+        # 实拍图：A/B 类要配（指向具体房源）；C 询问类不配（需求口吻，不指向房源）
+        if code[0] in ("A", "B"):
+            for j, ph in enumerate(_gather_photos(folder), 1):
+                shutil.copy2(ph, dst / f"{base}_{j}{ph.suffix}")
         ok += 1
 
     print(f"✅ 发布版导出完成：{ok} 篇 → {out_dir}")

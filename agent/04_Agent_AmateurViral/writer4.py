@@ -86,6 +86,13 @@ PROPERTY_ANGLES: dict[str, str] = {
     "预算现实吗":  "C1：预算够不够·现实吗版",
 }
 
+# 对比类角度：必须拿多套【真实房源】横向对比，禁止 LLM 虚构对照盘。
+# value = 参与对比的真实房源总数（含主房源）。脚本会自动从主房源的同级目录补齐其余真实房源。
+COMPARISON_ANGLES: dict[str, int] = {
+    "纠结对比":   2,   # A3 两套二选一
+    "决赛圈对比": 3,   # A4 决赛圈 2-3 套
+}
+
 ANGLE_CATEGORY_FOLDER: dict[str, str] = {
     # 大类1 忍痛放弃类
     "放弃叙事":    "1_忍痛放弃",
@@ -302,12 +309,48 @@ def _summarize_property(prop: dict) -> str:
     return " | ".join(parts)
 
 
-def build_property_angle_prompt(prop: dict, angle_key: str, reference_notes: list[dict]) -> str:
-    """构建"房源多角度模式"的 user prompt：针对具体房源 + 指定角度。"""
+def _prop_block(prop: dict) -> str:
+    """把单套房源渲染成 prompt 里的一段（摘要 + 完整数据）。"""
+    summary = _summarize_property(prop)
+    data = json.dumps(
+        {k: v for k, v in prop.items() if k not in ("images", "info_md_path", "property_dir")},
+        ensure_ascii=False, indent=2)
+    head = f"{summary}\n" if summary else ""
+    return f"{head}{data}"
+
+
+def build_property_angle_prompt(
+    prop: dict,
+    angle_key: str,
+    reference_notes: list[dict],
+    compare_props: Optional[list[dict]] = None,
+) -> str:
+    """构建"房源多角度模式"的 user prompt：针对具体房源 + 指定角度。
+
+    compare_props: 对比类角度（COMPARISON_ANGLES）的其余【真实房源】，与 prop 一起横向对比。
+    """
     summary = _summarize_property(prop)
     angle_label = PROPERTY_ANGLES[angle_key]
 
-    parts: list[str] = [f"""【本次看房的房源信息】
+    if angle_key in COMPARISON_ANGLES and compare_props:
+        all_props = [prop] + list(compare_props)
+        blocks = []
+        for i, p in enumerate(all_props, 1):
+            blocks.append(f"── 房源{i}：{p.get('name', '')} ──\n{_prop_block(p)}")
+        parts: list[str] = [f"""【本篇要横向对比的真实房源（共 {len(all_props)} 套，全部是我们的真实在售房源）】
+{chr(10).join(blocks)}
+
+【本篇指定角度】
+{angle_label}
+请严格按 system prompt "房源多角度模式" 中该角度的写法来写，不要混用其他角度的结构，
+也不要使用"四类素人笔记母题"的结构。
+
+【对比类铁律——违反即不合格】
+- 只能在上面这 {len(all_props)} 套真实房源里做对比/纠结/决赛圈，**严禁虚构任何其它楼盘**（不许编楼盘名、价格、面积、会所、校网等任何数据）。
+- 每套的地点、房型、总价、卖点、缺点都必须严格来自上面对应房源的数据，不能张冠李戴、不能夸大编造。
+- 可以提到"本来想要太古城/某梦想区但预算够不到"这类**只作背景、不作对比项**的一句话铺垫，但真正拿来纠结/PK 的候选，必须且只能是上面这几套真实房源。"""]
+    else:
+        parts = [f"""【本次看房的房源信息】
 {summary}
 
 【完整数据】
@@ -341,7 +384,9 @@ def build_property_angle_prompt(prop: dict, angle_key: str, reference_notes: lis
 - 上面的房源数据**只用来提取三样**：地点(区/片区)、房型(几房)、大致总价。其余精确参数（呎数/楼龄/楼层/到地铁几分钟/校网编号/装修状态）一律不要写进笔记。
 - 这不是看房笔记！绝对禁止"今天去看了/刚去看了/刚好看到一套/去XX盘看了"这类看房叙述，也不要出现任何具体楼盘名字、不要提带看小姐姐。
 - 通篇是"我想在<地点>、用<预算>、买<房型>"的需求口吻，可以再带一两个**笼统生活化**的偏好（如想要电梯、离地铁近一点、楼别太旧、采光好点），但偏好也要笼统，不准报精确数字。
-- 然后客观问大家这个预算+地点+房型现不现实，结尾邀请上车的/放弃换片区的来评论区说理由。短、自然、不刻意。"""
+- 然后客观问大家这个预算+地点+房型现不现实。短、自然、不刻意。
+- 【结尾反问必须原创、每篇不同】禁止套用"成功上车或者放弃换片区的朋友都可以来评论区说理由"这类固定模板句，换一种真实自然的问法（例：这价现在还够上车吗 / 是我预期太美好了吗 / 蹲一个同区上岸的说说 / 这么点钱在这区是不是想多了）。
+- 【全篇只能有一个问句结尾】正文里不要先抛一个问句、结尾又单起一行再问一次；疑问只保留结尾那一句。"""
     elif angle_key == "单价你会买吗":
         word_rule = "素人口吻，120-200字，聚焦一个点讲清楚不啰嗦"
     else:
@@ -816,6 +861,7 @@ def save_assembled(
     run_id: Optional[str] = None,
     output_dir: Optional[Path] = None,
     angle_key: str = "",
+    compare_props: Optional[list[dict]] = None,
 ) -> Path:
     """主输出：每篇笔记一个独立文件夹，含 note.txt + 房源实拍图。
 
@@ -856,8 +902,19 @@ def save_assembled(
     if angle_key:
         (folder / "_angle.txt").write_text(angle_key, encoding="utf-8")
 
-    # ── 房源实拍图 ──
-    if property_data:
+    # ── 记录源房源目录（供发布版按需从原图库补实拍图；C 询问篇不指向具体房源，不记）──
+    if ANGLE_CATEGORY_FOLDER.get(angle_key) != "3_询问":
+        src_dirs = []
+        for p in [property_data] + list(compare_props or []):
+            pd = (p or {}).get("property_dir", "")
+            if pd and pd not in src_dirs:
+                src_dirs.append(pd)
+        if src_dirs:
+            (folder / "_property.txt").write_text("\n".join(src_dirs), encoding="utf-8")
+
+    # ── 房源实拍图（C 询问篇是需求口吻、不指向具体房源，不放实拍图）──
+    is_inquiry = ANGLE_CATEGORY_FOLDER.get(angle_key) == "3_询问"
+    if property_data and not is_inquiry:
         prop_dir = property_data.get("property_dir", "")
         if prop_dir:
             prop_dir = Path(prop_dir)
@@ -903,6 +960,7 @@ def run(
     output_dir: Optional[Path] = None,
     property_data: Optional[dict] = None,
     angle_key: Optional[str] = None,
+    compare_props: Optional[list[dict]] = None,
 ) -> list[NoteContent]:
     """生成 n 篇素人账号爆款笔记。
 
@@ -910,6 +968,7 @@ def run(
     n: 生成篇数
     property_data + angle_key: 房源多角度模式。指定后忽略 category/n，
         针对该房源 + 该角度（PROPERTY_ANGLES 中的 key）生成单篇笔记。
+    compare_props: 对比类角度的其余真实房源（横向对比用）。
     """
     run_id = run_id or get_run_id()
     system_prompt = load_system_prompt()
@@ -923,7 +982,11 @@ def run(
     # ── 房源多角度模式 ──
     if property_data is not None and angle_key is not None:
         logger.info("【房源多角度模式】%s | %s", _summarize_property(property_data), PROPERTY_ANGLES[angle_key])
-        user_prompt = build_property_angle_prompt(property_data, angle_key, refs)
+        if angle_key in COMPARISON_ANGLES and compare_props:
+            logger.info("【对比类角度】横向对比 %d 套真实房源：%s",
+                        1 + len(compare_props),
+                        " vs ".join([property_data.get("name", "")] + [p.get("name", "") for p in compare_props]))
+        user_prompt = build_property_angle_prompt(property_data, angle_key, refs, compare_props=compare_props)
         result = call_llm(user_prompt, system_prompt)
 
         safe_name = sanitize_filename(property_data.get("name", "untitled"))
@@ -933,7 +996,8 @@ def run(
         md_path = save_pre_published(result, category=angle_key, run_id=run_id, output_dir=output_dir, file_prefix=prefix)
         # ★ 新主输出：文件夹版
         assembled_folder = save_assembled(result, property_data=property_data,
-                                          run_id=run_id, output_dir=output_dir, angle_key=angle_key)
+                                          run_id=run_id, output_dir=output_dir, angle_key=angle_key,
+                                          compare_props=compare_props)
 
         logger.info("标题: %s", result.hook_title)
         logger.info("文件夹: %s", assembled_folder)
@@ -974,6 +1038,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--list-categories", action="store_true", help="列出所有母题后退出")
     parser.add_argument("--property-dir", type=Path, default=None,
                          help="房源目录（启用房源多角度模式，必须同时传 --angle）")
+    parser.add_argument("--compare-dir", type=Path, action="append", default=None,
+                         help="对比类角度(纠结对比/决赛圈对比)的其余真实房源目录，可多次传；"
+                              "不传则自动从主房源同级目录随机补齐")
     parser.add_argument("--angle", type=str, default=None,
                          choices=list(PROPERTY_ANGLES.keys()),
                          help="写作角度（--property-dir 模式下必填）：" +
@@ -1004,17 +1071,44 @@ if __name__ == "__main__":
             print("\n示例：--property-dir <路径> --angle 看房日记")
             sys.exit(1)
         prop_dir = args.property_dir.resolve()
-        info_path = prop_dir / "info.md"
-        if not info_path.exists():
-            print(f"错误：找不到 {info_path}")
+
+        def _load_prop(d: Path) -> Optional[dict]:
+            ip = d / "info.md"
+            if not ip.exists():
+                return None
+            return {"name": d.name, "property_dir": str(d), "raw_info": ip.read_text(encoding="utf-8")}
+
+        prop_data = _load_prop(prop_dir)
+        if prop_data is None:
+            print(f"错误：找不到 {prop_dir / 'info.md'}")
             sys.exit(1)
-        # 把 info.md 全文塞进 raw_info，让 build_property_angle_prompt 直接用
-        prop_data = {
-            "name": prop_dir.name,
-            "property_dir": str(prop_dir),
-            "raw_info": info_path.read_text(encoding="utf-8"),
-        }
+
+        # ── 对比类角度：备齐其余真实房源，绝不让 LLM 虚构对照盘 ──
+        compare_props: Optional[list[dict]] = None
+        if args.angle in COMPARISON_ANGLES:
+            need = COMPARISON_ANGLES[args.angle] - 1
+            compare_props = []
+            # 1) 显式 --compare-dir
+            for cd in (args.compare_dir or []):
+                cp = _load_prop(cd.resolve())
+                if cp:
+                    compare_props.append(cp)
+            # 2) 不足则从主房源同级目录随机补齐真实房源
+            if len(compare_props) < need:
+                used = {prop_dir.name} | {Path(p["property_dir"]).name for p in compare_props}
+                siblings = [d for d in sorted(prop_dir.parent.iterdir())
+                            if d.is_dir() and d.name not in used and (d / "info.md").exists()]
+                random.shuffle(siblings)
+                for d in siblings[: need - len(compare_props)]:
+                    cp = _load_prop(d)
+                    if cp:
+                        compare_props.append(cp)
+            if len(compare_props) < need:
+                print(f"错误：对比角度「{args.angle}」需要 {need + 1} 套真实房源，"
+                      f"但同级目录只凑到 {len(compare_props) + 1} 套。请补 --compare-dir。")
+                sys.exit(1)
+
         run(property_data=prop_data, angle_key=args.angle,
-            run_id=args.run_id, output_dir=args.output_dir)
+            run_id=args.run_id, output_dir=args.output_dir, compare_props=compare_props)
     else:
         run(category=args.category, n=args.num, run_id=args.run_id, output_dir=args.output_dir)
